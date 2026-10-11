@@ -21,6 +21,9 @@ final class AutoSaveSettingTests: XCTestCase {
             AutoSaveSetting.disabledMinutes
         )
 
+        defaults.set(AutoSaveSetting.instant, forKey: AutoSaveSetting.defaultsKey)
+        XCTAssertEqual(AutoSaveSetting.currentMinutes(from: defaults), AutoSaveSetting.instant)
+
         defaults.set(120, forKey: AutoSaveSetting.defaultsKey)
         XCTAssertEqual(AutoSaveSetting.currentMinutes(from: defaults), 60)
     }
@@ -34,8 +37,16 @@ final class AutoSaveSettingTests: XCTestCase {
             AutoSaveSetting.disabledMinutes
         )
 
+        AutoSaveSetting.store(minutes: AutoSaveSetting.instant, in: defaults)
+        XCTAssertEqual(AutoSaveSetting.currentMinutes(from: defaults), AutoSaveSetting.instant)
+
         AutoSaveSetting.store(minutes: 12, in: defaults)
         XCTAssertEqual(AutoSaveSetting.currentMinutes(from: defaults), 12)
+    }
+
+    func testInstantUsesTwoSecondDelay() throws {
+        XCTAssertEqual(AutoSaveSetting.interval(for: AutoSaveSetting.instant), 2)
+        XCTAssertNil(AutoSaveSetting.interval(for: AutoSaveSetting.disabledMinutes))
     }
 
     func testThirtySecondIntervalUsesDedicatedValue() throws {

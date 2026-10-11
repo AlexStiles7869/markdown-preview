@@ -48,6 +48,7 @@ struct GeneralSettingsView: View {
                 LabeledContent {
                     Picker("", selection: $model.autoSaveIntervalMinutes) {
                         Text(L("Never")).tag(AutoSaveSetting.disabledMinutes)
+                        Text(L("Instant")).tag(AutoSaveSetting.instant)
                         Text(L("30 seconds")).tag(AutoSaveSetting.thirtySeconds)
                         Text(L("1 minute")).tag(1)
                         ForEach([5, 10, 15, 30, 60], id: \.self) { minutes in
