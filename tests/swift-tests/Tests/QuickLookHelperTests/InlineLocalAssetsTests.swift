@@ -283,6 +283,63 @@ final class InlineLocalAssetsTests: XCTestCase {
         XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
     }
 
+    func testAngleBracketInsideQuotedValueIsPartOfThePath() {
+        let html = #"<img src="chart>v2.png"> <img src='a>b.png'>"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/chart>v2.png": red,
+                "/tmp/qltest-fixture/a>b.png": blue,
+            ])
+        )
+        XCTAssertEqual(result.html, #"<img src="cid:md-asset-0"> <img src='cid:md-asset-1'>"#)
+    }
+
+    func testSpacedSrcIsMatchedAndDataSrcIsNot() {
+        let html = #"<img src = 'a.png'> <img data-src='b.png' src='c.png'>"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/a.png": red,
+                "/tmp/qltest-fixture/b.png": blue,
+                "/tmp/qltest-fixture/c.png": red,
+            ])
+        )
+        XCTAssertEqual(result.html, #"<img src = 'cid:md-asset-0'> <img data-src='b.png' src='cid:md-asset-1'>"#)
+    }
+
+    func testNamedReferencesAreCaseSensitive() {
+        // `&AMP;` is valid HTML; `&aMp;` is not, so WebKit keeps it literal.
+        let html = #"<img src="a&AMP;b.png"> <img src="c&aMp;d.png">"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/a&b.png": red,
+                "/tmp/qltest-fixture/c&aMp;d.png": blue,
+                "/tmp/qltest-fixture/c&d.png": red,
+            ])
+        )
+        XCTAssertEqual(result.attachments["md-asset-0"]?.data, red)
+        XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
+    }
+
+    func testNumericReferencesFollowHTMLReplacements() {
+        let html = #"<img src="price&#x80;.png"> <img src="bad&#xD800;.png">"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/price€.png": red,
+                "/tmp/qltest-fixture/bad\u{FFFD}.png": blue,
+            ])
+        )
+        XCTAssertEqual(result.attachments["md-asset-0"]?.data, red)
+        XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
+    }
+
     func testCharacterReferenceAbsolutePathIsStillChecked() {
         // `&#47;` is `/`: the decoded value is absolute, so only image
         // files outside the folder are read.

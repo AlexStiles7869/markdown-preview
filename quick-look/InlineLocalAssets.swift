@@ -116,12 +116,13 @@ enum InlineLocalAssets {
     }
 
     // Matches the double-quoted image tags emitted by MarkdownHTML's renderer
-    // and the single-quoted ones authors write in raw HTML. Group 2 is the
-    // quote, group 3 the value, group 4 the closing quote.
+    // and the single-quoted ones authors write in raw HTML. The whitespace
+    // before `src` skips `data-src`. Group 2 is the quote, group 3 the
+    // value, group 4 the closing quote.
     private static let imgSrcRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"(<img\b[^>]*?\bsrc=(["']))((?:(?!\2)[^>])*)(\2)"#,
+            pattern: #"(<img\b[^>]*?\ssrc\s*=\s*(["']))([\s\S]*?)(\2)"#,
             options: [.caseInsensitive]
         )
     }()
@@ -157,8 +158,9 @@ enum InlineLocalAssets {
     }
 
     /// Decodes the character references an attribute value can carry:
-    /// the five XML named ones and decimal or hex numeric ones. Anything
-    /// else, such as a bare `&` in raw HTML, stays as written.
+    /// the XML named ones (case-sensitive, as in HTML) and decimal or hex
+    /// numeric ones. Anything else, such as a bare `&` in raw HTML, stays
+    /// as written.
     private static func decodingCharacterReferences(_ value: String) -> String {
         guard value.contains("&") else { return value }
         let nsValue = value as NSString
@@ -170,18 +172,17 @@ enum InlineLocalAssets {
         ) {
             let body = nsValue.substring(with: match.range(at: 1))
             let decoded: String?
-            switch body.lowercased() {
-            case "amp": decoded = "&"
-            case "lt": decoded = "<"
-            case "gt": decoded = ">"
-            case "quot": decoded = "\""
+            switch body {
+            case "amp", "AMP": decoded = "&"
+            case "lt", "LT": decoded = "<"
+            case "gt", "GT": decoded = ">"
+            case "quot", "QUOT": decoded = "\""
             case "apos": decoded = "'"
-            default:
+            case _ where body.hasPrefix("#"):
                 let isHex = body.hasPrefix("#x") || body.hasPrefix("#X")
                 let digits = body.dropFirst(isHex ? 2 : 1)
-                decoded = UInt32(digits, radix: isHex ? 16 : 10)
-                    .flatMap(Unicode.Scalar.init)
-                    .map { String(Character($0)) }
+                decoded = UInt32(digits, radix: isHex ? 16 : 10).map(htmlNumericCharacter) ?? "\u{FFFD}"
+            default: decoded = nil
             }
             guard let decoded else { continue }
             output += nsValue.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
@@ -190,6 +191,17 @@ enum InlineLocalAssets {
         }
         output += nsValue.substring(from: cursor)
         return output
+    }
+
+    /// HTML reads 0x80–0x9F as Windows-1252 (`&#x80;` is `€`), and NUL,
+    /// surrogates, and values past U+10FFFF as U+FFFD.
+    private static func htmlNumericCharacter(_ value: UInt32) -> String {
+        if (0x80...0x9F).contains(value),
+           let character = String(bytes: [UInt8(value)], encoding: .windowsCP1252) {
+            return character
+        }
+        guard value != 0, let scalar = Unicode.Scalar(value) else { return "\u{FFFD}" }
+        return String(Character(scalar))
     }
 
     private static let characterReferenceRegex: NSRegularExpression = {
