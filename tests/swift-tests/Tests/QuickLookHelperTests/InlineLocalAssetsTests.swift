@@ -310,6 +310,26 @@ final class InlineLocalAssetsTests: XCTestCase {
         XCTAssertEqual(result.html, #"<img src = 'cid:md-asset-0'> <img data-src='b.png' src='cid:md-asset-1'>"#)
     }
 
+    func testSrcTextInsideAnotherAttributeIsSkipped() {
+        let html = #"<img title=" src = 'fake.png'" src="real.png"> <img alt="example src='other.png'" src='actual.png'>"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/real.png": red,
+                "/tmp/qltest-fixture/actual.png": blue,
+                "/tmp/qltest-fixture/fake.png": blue,
+                "/tmp/qltest-fixture/other.png": red,
+            ])
+        )
+        XCTAssertEqual(
+            result.html,
+            #"<img title=" src = 'fake.png'" src="cid:md-asset-0"> <img alt="example src='other.png'" src='cid:md-asset-1'>"#
+        )
+        XCTAssertEqual(result.attachments["md-asset-0"]?.data, red)
+        XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
+    }
+
     func testNamedReferencesAreCaseSensitive() {
         // `&AMP;` is valid HTML; `&aMp;` is not, so WebKit keeps it literal.
         let html = #"<img src="a&AMP;b.png"> <img src="c&aMp;d.png">"#

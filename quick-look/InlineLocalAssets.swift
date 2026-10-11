@@ -116,13 +116,14 @@ enum InlineLocalAssets {
     }
 
     // Matches the double-quoted image tags emitted by MarkdownHTML's renderer
-    // and the single-quoted ones authors write in raw HTML. The whitespace
-    // before `src` skips `data-src`. Group 2 is the quote, group 3 the
-    // value, group 4 the closing quote.
+    // and the single-quoted ones authors write in raw HTML. Other attributes'
+    // quoted values are skipped whole, so `src` text inside them never
+    // matches, and the whitespace before `src` skips `data-src`. Group 2 is
+    // the quote, group 3 the value, group 4 the closing quote.
     private static let imgSrcRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"(<img\b[^>]*?\ssrc\s*=\s*(["']))([\s\S]*?)(\2)"#,
+            pattern: #"(<img\b(?:[^>"']|"[^"]*"|'[^']*')*?\ssrc\s*=\s*(["']))([\s\S]*?)(\2)"#,
             options: [.caseInsensitive]
         )
     }()
