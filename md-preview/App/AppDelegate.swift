@@ -203,11 +203,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 guard let self else { return }
                 self.showWindowIfNeeded(for: document)
-                if let fragment,
-                   let controller = document?.windowControllers.first as? DocumentWindowController,
-                   let split = controller.documentWindow.contentViewController as? MainSplitViewController {
-                    split.scrollToAnchorWhenReady(fragment)
-                }
+                DocumentWindowController.scrollToAnchorWhenReady(fragment, in: document)
                 self.pendingOpenURLCount -= 1
                 if error != nil {
                     self.scheduleDocumentPromptIfIdle()

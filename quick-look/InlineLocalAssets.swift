@@ -135,12 +135,7 @@ enum InlineLocalAssets {
     /// paths resolve (#488). Files outside the document folder must have an
     /// image type, so a previewed file can't pull arbitrary files into the page.
     private static func resolveRelative(src attribute: String, baseDirectory: URL) -> URL? {
-        // The renderer escapes `&` in attributes (`a&b.png` → `a&amp;b.png`).
-        // WebKit would read the unescaped value, so resolve that one.
-        let src = decodingCharacterReferences(attribute)
-        guard !src.isEmpty else { return nil }
-        if src.hasPrefix("#") || src.hasPrefix("//") { return nil }
-        if hasURLScheme(src) { return nil }
+        guard let src = localReference(attribute) else { return nil }
         let isAbsolute = src.hasPrefix("/")
 
         // CommonMark renderers percent-encode spaces in image targets;
@@ -158,11 +153,23 @@ enum InlineLocalAssets {
         return candidate
     }
 
+    /// The value of a `src` or `href` attribute when it names a local path,
+    /// or nil for URLs with a scheme, `#fragment` refs, protocol-relative
+    /// `//host` refs, and empty values. The renderer escapes `&` in
+    /// attributes (`a&b.png` → `a&amp;b.png`); WebKit reads the unescaped
+    /// value, so this returns that one.
+    static func localReference(_ attribute: String) -> String? {
+        let value = decodingCharacterReferences(attribute)
+        guard !value.isEmpty, !value.hasPrefix("#"), !value.hasPrefix("//"),
+              !hasURLScheme(value) else { return nil }
+        return value
+    }
+
     /// Decodes the character references an attribute value can carry:
     /// the XML named ones (case-sensitive, as in HTML) and decimal or hex
     /// numeric ones. Anything else, such as a bare `&` in raw HTML, stays
     /// as written.
-    static func decodingCharacterReferences(_ value: String) -> String {
+    private static func decodingCharacterReferences(_ value: String) -> String {
         guard value.contains("&") else { return value }
         let nsValue = value as NSString
         var output = ""
@@ -225,7 +232,7 @@ enum InlineLocalAssets {
         return CGImageSourceGetType(source) != nil && CGImageSourceGetCount(source) > 0
     }
 
-    static func hasURLScheme(_ value: String) -> Bool {
+    private static func hasURLScheme(_ value: String) -> Bool {
         // Reject anything that looks like `scheme:` where scheme is
         // `[a-z][a-z0-9+.-]*` (RFC 3986). Stops short of `:` so paths like
         // `images/foo:bar.png` are still treated as relative.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import QuickLookHelpers
+@testable import MarkdownHelpers
 
 final class LocalLinksTests: XCTestCase {
 
@@ -46,5 +46,18 @@ final class LocalLinksTests: XCTestCase {
             LocalLinks.rewrite(html: html, baseDirectory: baseDir),
             ##"<a href="md-preview://file/tmp/ql-links/docs/a&amp;b.md#x">A</a> <a href='md-preview://file/tmp/ql-links/docs/it&#39;s.md'>B</a> <a href="#top">C</a> <a href="https://e.com">D</a>"##
         )
+    }
+
+    func testSpacedHrefIsMatchedAndDataHrefIsNot() {
+        let html = #"<a href = 'notes.md'>A</a> <a data-href='cache.md' href='notes.md'>B</a>"#
+        XCTAssertEqual(
+            LocalLinks.rewrite(html: html, baseDirectory: baseDir),
+            #"<a href = 'md-preview://file/tmp/ql-links/docs/notes.md'>A</a> <a data-href='cache.md' href='md-preview://file/tmp/ql-links/docs/notes.md'>B</a>"#
+        )
+    }
+
+    func testUnchangedHTMLIsReturnedAsIs() {
+        let html = #"<a href="https://example.com">x</a>"#
+        XCTAssertEqual(LocalLinks.rewrite(html: html, baseDirectory: baseDir), html)
     }
 }

@@ -1,1 +1,0 @@
-../../../../md-preview/ExternalOpenScheme.swift

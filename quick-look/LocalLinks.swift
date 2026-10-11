@@ -11,8 +11,6 @@ import Foundation
 /// hand an arbitrary file, such as a script, to its default app.
 enum LocalLinks {
 
-    static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkdn", "mkd", "mdx"]
-
     static func rewrite(html: String, baseDirectory: URL) -> String {
         let nsHtml = html as NSString
         let matches = hrefRegex.matches(
@@ -24,6 +22,7 @@ enum LocalLinks {
         var output = ""
         output.reserveCapacity(html.count)
         var cursor = 0
+        var changed = false
         for match in matches {
             output += nsHtml.substring(with: NSRange(
                 location: cursor,
@@ -34,11 +33,13 @@ enum LocalLinks {
                 output += nsHtml.substring(with: match.range(at: 1))
                 output += escapedAttribute(url.absoluteString)
                 output += nsHtml.substring(with: match.range(at: 4))
+                changed = true
             } else {
                 output += nsHtml.substring(with: match.range)
             }
             cursor = match.range.location + match.range.length
         }
+        guard changed else { return html }
         output += nsHtml.substring(from: cursor)
         return output
     }
@@ -47,11 +48,7 @@ enum LocalLinks {
     /// scheme, same-page `#fragment` links, protocol-relative `//host`
     /// links, and targets that are not Markdown files.
     static func appURL(forHref attribute: String, baseDirectory: URL) -> URL? {
-        // The renderer escapes `&` in attributes; WebKit would read the
-        // unescaped value.
-        let href = InlineLocalAssets.decodingCharacterReferences(attribute)
-        guard !href.isEmpty, !href.hasPrefix("#"), !href.hasPrefix("//"),
-              !InlineLocalAssets.hasURLScheme(href) else { return nil }
+        guard let href = InlineLocalAssets.localReference(attribute) else { return nil }
 
         var path = href
         var fragment: String?
@@ -66,16 +63,8 @@ enum LocalLinks {
 
         let file = URL(fileURLWithPath: decodedPath, relativeTo: baseDirectory.standardizedFileURL)
             .standardizedFileURL
-        guard markdownExtensions.contains(file.pathExtension.lowercased()) else { return nil }
-
-        var components = URLComponents()
-        components.scheme = "md-preview"
-        components.host = "file"
-        components.path = file.path
-        if let fragment, !fragment.isEmpty {
-            components.fragment = fragment.removingPercentEncoding ?? fragment
-        }
-        return components.url
+        guard MarkdownAssetResolution.isMarkdownDocument(file) else { return nil }
+        return ExternalOpenScheme.url(forFile: file, fragment: fragment.map { $0.removingPercentEncoding ?? $0 })
     }
 
     private static func escapedAttribute(_ value: String) -> String {
@@ -88,11 +77,11 @@ enum LocalLinks {
     }
 
     // Same shape as `InlineLocalAssets`' image regex: either quote style,
-    // group 3 is the value.
+    // `data-href` skipped, group 3 is the value.
     private static let hrefRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"(<a\b[^>]*?\bhref=(["']))((?:(?!\2)[^>])*)(\2)"#,
+            pattern: #"(<a\b[^>]*?\shref\s*=\s*(["']))([\s\S]*?)(\2)"#,
             options: [.caseInsensitive]
         )
     }()

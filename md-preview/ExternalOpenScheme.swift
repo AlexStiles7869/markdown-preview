@@ -39,9 +39,20 @@ nonisolated enum ExternalOpenScheme {
         return URL(fileURLWithPath: path).standardizedFileURL
     }
 
-    /// The percent-decoded `#section` of an md-preview:// link, so the
-    /// opened document can scroll to it. Quick Look writes these for
-    /// links such as `[x](other.md#section)`.
+    /// `md-preview://file/<absolute path>#fragment`, the form
+    /// `resolvedURL(opening:)` reads back.
+    static func url(forFile file: URL, fragment: String?) -> URL? {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "file"
+        components.path = file.path
+        if let fragment, !fragment.isEmpty {
+            components.fragment = fragment
+        }
+        return components.url
+    }
+
+    /// The percent-decoded `#section` of an md-preview:// link.
     static func fragment(opening url: URL) -> String? {
         guard url.scheme?.caseInsensitiveCompare(scheme) == .orderedSame,
               let fragment = url.fragment?.removingPercentEncoding,
