@@ -38,4 +38,15 @@ nonisolated enum ExternalOpenScheme {
         guard path.count > 1, path.hasPrefix("/") else { return nil }
         return URL(fileURLWithPath: path).standardizedFileURL
     }
+
+    /// The percent-decoded `#section` of an md-preview:// link, so the
+    /// opened document can scroll to it. Quick Look writes these for
+    /// links such as `[x](other.md#section)`.
+    static func fragment(opening url: URL) -> String? {
+        guard url.scheme?.caseInsensitiveCompare(scheme) == .orderedSame,
+              let fragment = url.fragment?.removingPercentEncoding,
+              !fragment.isEmpty
+        else { return nil }
+        return fragment
+    }
 }

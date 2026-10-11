@@ -162,7 +162,7 @@ enum InlineLocalAssets {
     /// the XML named ones (case-sensitive, as in HTML) and decimal or hex
     /// numeric ones. Anything else, such as a bare `&` in raw HTML, stays
     /// as written.
-    private static func decodingCharacterReferences(_ value: String) -> String {
+    static func decodingCharacterReferences(_ value: String) -> String {
         guard value.contains("&") else { return value }
         let nsValue = value as NSString
         var output = ""
@@ -225,7 +225,7 @@ enum InlineLocalAssets {
         return CGImageSourceGetType(source) != nil && CGImageSourceGetCount(source) > 0
     }
 
-    private static func hasURLScheme(_ value: String) -> Bool {
+    static func hasURLScheme(_ value: String) -> Bool {
         // Reject anything that looks like `scheme:` where scheme is
         // `[a-z][a-z0-9+.-]*` (RFC 3986). Stops short of `:` so paths like
         // `images/foo:bar.png` are still treated as relative.
