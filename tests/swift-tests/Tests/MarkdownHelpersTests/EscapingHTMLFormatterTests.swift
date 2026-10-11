@@ -10,6 +10,12 @@ final class EscapingHTMLFormatterTests: XCTestCase {
         TestVendor.installHighlighterGrammar()
     }
 
+    func testImagesKeepEscapedAltText() {
+        let html = EscapingHTMLFormatter.format(#"![Q1 & Q2 *weekly* sales](chart.png "Weekly") ![](spacer.png)"#)
+        XCTAssertTrue(html.contains(#"<img src="chart.png" alt="Q1 &amp; Q2 weekly sales" title="Weekly" />"#), html)
+        XCTAssertTrue(html.contains(#"<img src="spacer.png" alt="" />"#), html)
+    }
+
 
     func testBareURLFastPathHandlesUppercaseAndDecodedEntities() {
         for markdown in ["HTTPS://example.com/", "h&#116;tp://example.com/", #"http\://example.com/"#] {

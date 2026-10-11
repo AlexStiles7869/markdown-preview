@@ -1606,6 +1606,9 @@ nonisolated struct EscapingHTMLFormatter: MarkupWalker {
         if let source = image.source, !source.isEmpty {
             result += " src=\"\(escapeAttribute(source))\""
         }
+        // Always emit alt: VoiceOver reads it, broken images show it, and an
+        // empty alt marks the image as decorative instead of reading the path.
+        result += " alt=\"\(escapeAttribute(image.plainText))\""
         if let title = image.title, !title.isEmpty {
             result += " title=\"\(escapeAttribute(title))\""
         }
