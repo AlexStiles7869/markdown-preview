@@ -85,4 +85,22 @@ final class ExternalOpenSchemeTests: XCTestCase {
         XCTAssertNil(ExternalOpenScheme.fragment(opening: URL(string: "md-preview://file/Users/me/a.md#")!))
         XCTAssertNil(ExternalOpenScheme.fragment(opening: URL(string: "file:///Users/me/a.md#x")!))
     }
+
+    // MARK: - Quick Look hand-off
+
+    func testQuickLookNotificationIsPerApp() {
+        XCTAssertEqual(ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: "doc.md-preview").rawValue,
+                       "doc.md-preview.quick-look.open")
+        XCTAssertNotEqual(ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: "doc.md-preview"),
+                          ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: "doc.md-preview.dev"))
+    }
+
+    func testQuickLookHandsOffOnlyWebAndAppLinks() {
+        for string in ["https://example.com", "HTTP://example.com", "md-preview://file/Users/me/a.md"] {
+            XCTAssertTrue(ExternalOpenScheme.isQuickLookHandOff(URL(string: string)!), string)
+        }
+        for string in ["mailto:a@b.c", "unlisted-app://x", "file:///etc/hosts", "javascript:alert(1)", "guide.md"] {
+            XCTAssertFalse(ExternalOpenScheme.isQuickLookHandOff(URL(string: string)!), string)
+        }
+    }
 }

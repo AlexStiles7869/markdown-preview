@@ -110,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashReporter.start()
+        observeQuickLookLinks()
         let storedAppearance = AppearanceMode.migrateLegacyValue()
         ThemePreset.migrateLegacyValues()
         let appearanceMode = ThemePreset.applied().requiredAppearance ?? storedAppearance
@@ -174,6 +175,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return false
         }
         return true
+    }
+
+    /// Quick Look hands Markdown links to the running app; see
+    /// `ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier:)`.
+    private func observeQuickLookLinks() {
+        guard let appID = Bundle.main.bundleIdentifier else { return }
+        DistributedNotificationCenter.default().addObserver(
+            forName: ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: appID),
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            // Any process can post this, so accept only what a Quick Look
+            // link produces: a web link, or an md-preview:// link to a
+            // Markdown file.
+            guard let string = note.object as? String,
+                  let url = URL(string: string),
+                  ExternalOpenScheme.isQuickLookHandOff(url)
+            else { return }
+            MainActor.assumeIsolated {
+                guard url.scheme?.caseInsensitiveCompare(ExternalOpenScheme.scheme) == .orderedSame else {
+                    ExternalLinkOpener.open(url, window: nil)
+                    return
+                }
+                guard let file = ExternalOpenScheme.resolvedURL(opening: url),
+                      MarkdownAssetResolution.isMarkdownDocument(file)
+                else { return }
+                NSApp.activate()
+                self?.application(NSApp, open: [url])
+            }
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

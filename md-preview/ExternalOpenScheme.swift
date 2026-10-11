@@ -52,6 +52,23 @@ nonisolated enum ExternalOpenScheme {
         return components.url
     }
 
+    /// LaunchServices refuses every open from the Quick Look extension's
+    /// launch session, web links included (#492). The extension hands a
+    /// Markdown link to the running app with this distributed notification
+    /// instead; its object is the URL string. The name carries
+    /// the app's bundle identifier, so a Debug and a release build do not
+    /// both answer.
+    static func quickLookOpenNotification(appBundleIdentifier: String) -> Notification.Name {
+        Notification.Name(appBundleIdentifier + ".quick-look.open")
+    }
+
+    /// The links Quick Look hands to the app: web links, and md-preview://
+    /// links (Quick Look's rewrite of links to Markdown files).
+    static func isQuickLookHandOff(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https" || scheme == Self.scheme
+    }
+
     /// The percent-decoded `#section` of an md-preview:// link.
     static func fragment(opening url: URL) -> String? {
         guard url.scheme?.caseInsensitiveCompare(scheme) == .orderedSame,

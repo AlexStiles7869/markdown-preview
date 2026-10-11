@@ -424,8 +424,13 @@ private final class QuickLookWebView: WKWebView {
 }
 
 final class PreviewViewController: NSViewController, QLPreviewingController, WKNavigationDelegate {
-    /// Injectable dispatch keeps navigation tests from launching external apps.
-    var openExternalLink: @MainActor (URL, NSWindow?) -> Void = ExternalLinkOpener.open
+    /// Quick Look cannot open URLs: LaunchServices refuses every launch from
+    /// the extension, web links included (#492). Web links and links to
+    /// Markdown files go to the running app; any other link, or any link
+    /// while the app is closed, gets the alert sound. Injectable so tests
+    /// send nothing.
+    var handOffToApp: @MainActor (URL) -> Bool = PreviewViewController.postToRunningApp
+    var rejectLink: @MainActor () -> Void = { NSSound.beep() }
 
     private static let copyFeedbackDuration: TimeInterval = 1.0
     private static let floatingButtonMinimumWidth: CGFloat = 70
@@ -691,6 +696,24 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
         }
 
         decisionHandler(.cancel)
-        openExternalLink(url, webView.window)
+        if ExternalOpenScheme.isQuickLookHandOff(url), handOffToApp(url) { return }
+        rejectLink()
+    }
+
+    /// Posts `url` for the app to open. False when the app is not running,
+    /// since nothing would receive it.
+    static func postToRunningApp(_ url: URL) -> Bool {
+        guard let extensionID = Bundle.main.bundleIdentifier,
+              extensionID.hasSuffix(".quick-look")
+        else { return false }
+        let appID = String(extensionID.dropLast(".quick-look".count))
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty else { return false }
+        DistributedNotificationCenter.default().postNotificationName(
+            ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: appID),
+            object: url.absoluteString,
+            userInfo: nil,
+            deliverImmediately: true
+        )
+        return true
     }
 }
