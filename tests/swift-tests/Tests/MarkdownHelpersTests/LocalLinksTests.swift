@@ -60,4 +60,29 @@ final class LocalLinksTests: XCTestCase {
         let html = #"<a href="https://example.com">x</a>"#
         XCTAssertEqual(LocalLinks.rewrite(html: html, baseDirectory: baseDir), html)
     }
+
+    func testUnquotedHrefIsRewrittenWithQuotes() {
+        let html = #"<a href=guide.md>A</a> <a class=x href=a&amp;b.md#y>B</a> <a href=https://e.com>C</a>"#
+        XCTAssertEqual(
+            LocalLinks.rewrite(html: html, baseDirectory: baseDir),
+            #"<a href="md-preview://file/tmp/ql-links/docs/guide.md">A</a> <a class=x href="md-preview://file/tmp/ql-links/docs/a&amp;b.md#y">B</a> <a href=https://e.com>C</a>"#
+        )
+    }
+
+    func testHrefTextInsideAnotherAttributeIsSkipped() {
+        let html = #"<a title=" href = 'fake.md'" href="real.md">A</a>"#
+        XCTAssertEqual(
+            LocalLinks.rewrite(html: html, baseDirectory: baseDir),
+            #"<a title=" href = 'fake.md'" href="md-preview://file/tmp/ql-links/docs/real.md">A</a>"#
+        )
+    }
+
+    func testLiteralPercentInFileNameIsKept() {
+        XCTAssertEqual(appURL("100%.md"), "md-preview://file/tmp/ql-links/docs/100%25.md")
+        XCTAssertEqual(
+            LocalLinks.appURL(forHref: "100%.md", baseDirectory: baseDir)
+                .flatMap(ExternalOpenScheme.resolvedURL(opening:))?.path,
+            "/tmp/ql-links/docs/100%.md"
+        )
+    }
 }

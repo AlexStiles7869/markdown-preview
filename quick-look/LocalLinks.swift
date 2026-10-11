@@ -28,11 +28,13 @@ enum LocalLinks {
                 location: cursor,
                 length: match.range.location - cursor
             ))
-            let href = nsHtml.substring(with: match.range(at: 3))
+            let isQuoted = match.range(at: 3).location != NSNotFound
+            let href = nsHtml.substring(with: match.range(at: isQuoted ? 3 : 4))
             if let url = appURL(forHref: href, baseDirectory: baseDirectory) {
+                // An unquoted value gains quotes: the URL may contain `&`.
+                let quote = isQuoted ? nsHtml.substring(with: match.range(at: 2)) : "\""
                 output += nsHtml.substring(with: match.range(at: 1))
-                output += escapedAttribute(url.absoluteString)
-                output += nsHtml.substring(with: match.range(at: 4))
+                output += quote + escapedAttribute(url.absoluteString) + quote
                 changed = true
             } else {
                 output += nsHtml.substring(with: match.range)
@@ -59,7 +61,9 @@ enum LocalLinks {
         if let query = path.firstIndex(of: "?") {
             path = String(path[..<query])
         }
-        guard let decodedPath = path.removingPercentEncoding, !decodedPath.isEmpty else { return nil }
+        // A literal `%` (`100%.md`) does not decode; keep the path as written.
+        let decodedPath = path.removingPercentEncoding ?? path
+        guard !decodedPath.isEmpty else { return nil }
 
         let file = URL(fileURLWithPath: decodedPath, relativeTo: baseDirectory.standardizedFileURL)
             .standardizedFileURL
@@ -76,12 +80,14 @@ enum LocalLinks {
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    // Same shape as `InlineLocalAssets`' image regex: either quote style,
-    // `data-href` skipped, group 3 is the value.
+    // Like `InlineLocalAssets`' image regex, other attributes' quoted values
+    // are skipped whole and `data-href` does not match. The value may also be
+    // unquoted. Group 1 runs up to the value, group 2 is the quote, group 3
+    // a quoted value, group 4 an unquoted one.
     private static let hrefRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"(<a\b[^>]*?\shref\s*=\s*(["']))([\s\S]*?)(\2)"#,
+            pattern: #"(<a\b(?:[^>"']|"[^"]*"|'[^']*')*?\shref\s*=\s*)(?:(["'])([\s\S]*?)\2|([^\s"'=<>`]+))"#,
             options: [.caseInsensitive]
         )
     }()
