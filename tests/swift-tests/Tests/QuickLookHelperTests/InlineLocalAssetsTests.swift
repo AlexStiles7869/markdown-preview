@@ -223,12 +223,74 @@ final class InlineLocalAssetsTests: XCTestCase {
         XCTAssertTrue(result.attachments.isEmpty)
     }
 
-    func testSingleQuotedRawHTMLImageLeftAlone() {
-        let html = #"<img src='images/local.png'>"#
+    func testSingleQuotedRawHTMLImageBecomesCID() {
+        let html = #"<img src='images/local.png' width="40">"#
         let result = InlineLocalAssets.rewriteRelativeImages(
             html: html,
             baseDirectory: baseDir,
-            reader: { _ in XCTFail("reader must not be called"); return Data() }
+            reader: reader(["/tmp/qltest-fixture/images/local.png": red])
+        )
+        XCTAssertEqual(result.attachments.values.first?.data, red)
+        XCTAssertEqual(result.html, #"<img src='cid:md-asset-0' width="40">"#)
+        XCTAssertTrue(
+            InlineLocalAssets.dataURLHTML(from: result).hasPrefix("<img src='data:image/png;base64,"),
+            InlineLocalAssets.dataURLHTML(from: result)
+        )
+    }
+
+    func testOtherQuoteInsideValueIsPartOfThePath() {
+        let html = #"<img src="it's.png"> <img src='say "hi".png'>"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/it's.png": red,
+                "/tmp/qltest-fixture/say \"hi\".png": blue,
+            ])
+        )
+        XCTAssertEqual(result.html, #"<img src="cid:md-asset-0"> <img src='cid:md-asset-1'>"#)
+        XCTAssertEqual(result.attachments["md-asset-0"]?.data, red)
+        XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
+    }
+
+    func testEscapedAmpersandIsDecodedBeforeReading() {
+        // The renderer writes `![x](a&b.png)` as `src="a&amp;b.png"`.
+        let html = #"<img src="a&amp;b.png"> <img src="c&#38;d.png"> <img src="e&#x26;f.png">"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/a&b.png": red,
+                "/tmp/qltest-fixture/c&d.png": blue,
+                "/tmp/qltest-fixture/e&f.png": red,
+            ])
+        )
+        XCTAssertEqual(result.attachments.count, 3)
+        XCTAssertFalse(result.html.contains("&"), result.html)
+    }
+
+    func testBareAmpersandInRawHTMLStaysLiteral() {
+        let html = #"<img src='a&b.png'> <img src="x&amp.png">"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: reader([
+                "/tmp/qltest-fixture/a&b.png": red,
+                "/tmp/qltest-fixture/x&amp.png": blue,
+            ])
+        )
+        XCTAssertEqual(result.attachments["md-asset-0"]?.data, red)
+        XCTAssertEqual(result.attachments["md-asset-1"]?.data, blue)
+    }
+
+    func testCharacterReferenceAbsolutePathIsStillChecked() {
+        // `&#47;` is `/`: the decoded value is absolute, so only image
+        // files outside the folder are read.
+        let html = #"<img src="&#47;etc&#47;passwd">"#
+        let result = InlineLocalAssets.rewriteRelativeImages(
+            html: html,
+            baseDirectory: baseDir,
+            reader: { _ in XCTFail("reader must not be called for a non-image outside the folder"); return Data() }
         )
         XCTAssertEqual(result.html, html)
         XCTAssertTrue(result.attachments.isEmpty)
