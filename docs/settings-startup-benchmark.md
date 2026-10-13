@@ -27,3 +27,5 @@ Normal-app baseline is PR head `6fd5813`; candidate differs by deferring `reload
 - All 13 selected prewarming and toolbar-order Swift tests pass.
 - Native UI: `samples/full.md` renders; General Settings shows the saved Codex selection; the picker lists installed apps; switching to Reading and back repopulates the picker without changing that selection.
 - No signing, entitlement, release-metadata, or menu-XIB changes. The diagnostic AppDelegate harness is not included in the production PR.
+
+A later [AppDelegate startup audit](appdelegate-startup-audit.md) tested further updater and Settings deferrals. They did not improve full-app launch timing and were not retained.
