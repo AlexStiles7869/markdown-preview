@@ -668,6 +668,17 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
         activatePreviewIfReady()
     }
 
+    /// The page is `about:blank`, so `#x` links resolve to `about:blank#x`.
+    /// WebKit can hand that over with the `#` percent-encoded
+    /// (`about:blank%23x`), which leaves `URL.fragment` nil. Returns an
+    /// empty string for a bare `#` link.
+    nonisolated static func pageFragment(of url: URL) -> String? {
+        let string = url.absoluteString
+        guard let prefix = ["about:blank#", "about:blank%23"].first(where: string.hasPrefix) else { return nil }
+        let fragment = String(string.dropFirst(prefix.count))
+        return fragment.removingPercentEncoding ?? fragment
+    }
+
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
@@ -682,11 +693,16 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
             return
         }
 
-        let isPageFragment = url.scheme == "about"
-            && url.path == "blank"
-            && url.fragment != nil
-        if isPageFragment {
-            decisionHandler(.allow)
+        if let fragment = Self.pageFragment(of: url) {
+            // Headings have no slug ids, so a plain fragment navigation finds
+            // nothing. Resolve the target the way the app does instead.
+            decisionHandler(.cancel)
+            webView.evaluateJavaScript("""
+            (() => {
+                const el = \(MarkdownHTML.fragmentTargetScript(id: fragment));
+                if (el) el.scrollIntoView({ block: 'start' });
+            })();
+            """)
             return
         }
 
