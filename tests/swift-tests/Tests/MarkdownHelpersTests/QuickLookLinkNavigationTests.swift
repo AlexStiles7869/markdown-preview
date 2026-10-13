@@ -90,7 +90,8 @@ final class QuickLookLinkNavigationTests: XCTestCase {
         let imageHref = try await view.evaluateJavaScript("document.querySelectorAll('article a')[2].getAttribute('href')")
         XCTAssertEqual(imageHref as? String, "diagram.png", "Non-Markdown targets stay as written")
 
-        // A non-Markdown file cannot open, and with the app closed nothing can.
+        // A non-Markdown file cannot open. Without a running app or Finder host,
+        // the isolated test controller rejects the remaining link.
         for (index, expectedRejections) in [(2, 1), (0, 2)] {
             if index == 0 { appIsRunning = false }
             _ = try await view.evaluateJavaScript("document.querySelectorAll('article a')[\(index)].click(); true")
@@ -131,7 +132,7 @@ final class QuickLookLinkNavigationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: file) }
         let controller = PreviewViewController()
         var opened: [URL] = []
-        controller.openExternalLink = { url, _ in opened.append(url) }
+        controller.handOffToApp = { url in opened.append(url); return true }
         try await controller.preparePreviewOfFile(at: file)
         let view = try XCTUnwrap(controller.view.subviews.compactMap { $0 as? WKWebView }.first)
         view.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
