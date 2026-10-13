@@ -276,8 +276,9 @@ final class SettingsModel {
         checksForUpdatesAutomatically = updater?.automaticallyChecksForUpdates ?? true
         downloadsUpdatesAutomatically = updater?.automaticallyDownloadsUpdates ?? false
         lastUpdateCheckDate = updater?.lastUpdateCheckDate
+        // The General pane populates its app picker on appearance. Launch
+        // settings do not need installed-app discovery or picker icons.
         openTargetID = ""
-        reloadOpenTargets()
 
         if let updater {
             // Changing automatic checks can make Sparkle recalculate whether
