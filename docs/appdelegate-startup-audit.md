@@ -70,3 +70,5 @@ Evidence and reproduction scripts: `/Users/fauzaan/Desktop/Pluk/issue-492-handof
 ## Where the remaining time lies
 
 In the eight-run full-app probe, the non-overlapping updater/launch/activation callback spans total **55.29 ms median**. The interval from activation callback completion to the window-show marker is **399.86 ms median**, range **358.65–564.09 ms**. That interval is not a measurement of one function: it includes the subsequent document-opening/rendering/window path and scheduling. Instrument document creation, window setup, layout, toolbar construction, and reader preparation individually next. Changing AppDelegate call placement alone did not resolve it.
+
+The follow-up [document-window audit](lazy-document-ui.md) profiles the individual components and records the lazy find-overlay and inspector implementation, runtime checks, and full-launch comparison.

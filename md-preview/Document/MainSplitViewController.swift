@@ -38,6 +38,7 @@ final class MainSplitViewController: NSSplitViewController {
     var onSelectFile: ((URL) -> Void)?
     var onOpenMarkdownLink: ((URL) -> Void)?
     private var sidebarCollapseObservation: NSKeyValueObservation?
+    private var inspectorCollapseObservation: NSKeyValueObservation?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -72,6 +73,15 @@ final class MainSplitViewController: NSSplitViewController {
             }
         }
 
+        // Observe before restoring split state so an inspector restored open
+        // is populated too. AppKit split-item mutations occur on the main thread.
+        inspectorCollapseObservation = inspector.observe(\.isCollapsed, options: [.initial, .new]) { [weak self] _, change in
+            let isCollapsed = change.newValue ?? true
+            MainActor.assumeIsolated {
+                self?.inspectorViewController?.setPresented(!isCollapsed)
+            }
+        }
+
         splitView.autosaveName = "MainSplitView"
         DispatchQueue.main.async { [weak self] in
             self?.normalizeSidebarWidthIfNeeded()
@@ -100,7 +110,7 @@ final class MainSplitViewController: NSSplitViewController {
             assetBaseURL: assetBaseURL
         )
         sidebarViewController?.display(markdown: markdown, fileName: fileName, fileURL: url)
-        inspectorViewController?.display(metadata: DocumentMetadata.make(url: url, markdown: markdown))
+        inspectorViewController?.display(markdown: markdown, url: url)
     }
 
     /// URL-only refresh after a rename. Skips the content re-render so
@@ -109,7 +119,7 @@ final class MainSplitViewController: NSSplitViewController {
     func openFileURLDidChange(_ newURL: URL, markdown: String) {
         contentViewController?.sourceFileURLDidChange(newURL)
         sidebarViewController?.openFileURLDidChange(newURL)
-        inspectorViewController?.display(metadata: DocumentMetadata.make(url: newURL, markdown: markdown))
+        inspectorViewController?.display(markdown: markdown, url: newURL)
     }
 
     func openFolder(_ folderURL: URL, selectedFileURL: URL?) {
@@ -231,6 +241,7 @@ final class MainSplitViewController: NSSplitViewController {
     func toggleInspector() -> Bool {
         guard let inspector = splitViewItems.last else { return false }
         let shouldShow = inspector.isCollapsed
+        inspectorViewController?.setPresented(shouldShow)
         inspector.animator().isCollapsed = !shouldShow
         return shouldShow
     }
@@ -754,7 +765,7 @@ private final class LayeredContentViewController: NSViewController {
         updateChromeOverlayLayout()
     }
 
-    /// The find bar stays mounted for the window's lifetime and toggles
+    /// After the first search, the find bar stays mounted and toggles
     /// via isHidden — an overlay never reflows the layout, so showing it
     /// cannot move the tab bar the way a titlebar accessory did.
     func installFindOverlay(_ bar: NSView) {

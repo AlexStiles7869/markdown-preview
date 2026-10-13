@@ -131,7 +131,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     var findBar: FindBar?
     /// Container for the find bar. A content overlay like editBar — not a
     /// titlebar accessory — so showing it never pushes the tab bar down.
-    /// Mounted once at setup and toggled via isHidden.
+    /// Mounted on the first search and reused via isHidden.
     weak var findBarOverlay: NSView?
     var searchMode: SearchMode = .contains
     var pendingFindWork: DispatchWorkItem?
@@ -235,7 +235,6 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         migrateLegacySidebarToolbarIfNeeded(in: toolbar)
         observeAndPersistToolbarPreferences(toolbar)
 
-        installFindBar()
         applyWindowBackgroundTheme()
     }
 
