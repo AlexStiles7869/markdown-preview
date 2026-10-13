@@ -424,13 +424,14 @@ private final class QuickLookWebView: WKWebView {
 }
 
 final class PreviewViewController: NSViewController, QLPreviewingController, WKNavigationDelegate {
-    /// Quick Look cannot open URLs: LaunchServices refuses every launch from
-    /// the extension, web links included (#492). Web links and links to
-    /// Markdown files go to the running app; any other link, or any link
-    /// while the app is closed, gets the alert sound. Injectable so tests
-    /// send nothing.
+    /// LaunchServices refuses URL opens from this extension's launch session.
+    /// The running app receives a notification; a closed app can be started by
+    /// Finder's preview host when it is the source file's default application.
     var handOffToApp: @MainActor (URL) -> Bool = PreviewViewController.postToRunningApp
     var rejectLink: @MainActor () -> Void = { NSSound.beep() }
+    private var previewedFileURL: URL?
+    private static var pendingLink: QuickLookLinkHandoff.Pending?
+    private static var queryObserver: NSObjectProtocol?
 
     private static let copyFeedbackDuration: TimeInterval = 1.0
     private static let floatingButtonMinimumWidth: CGFloat = 70
@@ -447,6 +448,68 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
     private var markdownSource: String?
     private var isPreviewReady = false
     private var isPreviewVisible = false
+
+    /// Quick Look's private host channel has no arbitrary-URL open operation.
+    /// Its double-click operation asks Finder to open the previewed file. Only
+    /// invoke it after confirming that the containing app handles that file;
+    /// the pending request lets the app replace that source with the target.
+    private func launchAppViaPreviewHost(_ url: URL) -> Bool {
+        guard let source = previewedFileURL,
+              let extensionID = Bundle.main.bundleIdentifier,
+              extensionID.hasSuffix(".quick-look"),
+              let context = extensionContext else { return false }
+        let appID = String(extensionID.dropLast(".quick-look".count))
+        guard let handler = NSWorkspace.shared.urlForApplication(toOpen: source),
+              Bundle(url: handler)?.bundleIdentifier == appID,
+              QuickLookLinkHandoff.isSupported(url)
+        else { return false }
+
+        if let pending = Self.pendingLink,
+           (0..<60).contains(Date().timeIntervalSince(pending.created)) {
+            // A second click while LaunchServices starts the app replaces the
+            // target, retaining the source Finder has already been asked to open.
+            Self.pendingLink = .init(source: pending.source, target: url, created: pending.created)
+            return true
+        }
+        let selector = NSSelectorFromString("_auxiliaryConnection")
+        guard context.responds(to: selector),
+              let connection = context.perform(selector)?.takeUnretainedValue() as? NSXPCConnection,
+              let hostProtocol = connection.remoteObjectInterface?.protocol else { return false }
+        let doubleClick = NSSelectorFromString("doubleClickOnPreviewContent")
+        guard protocol_getMethodDescription(hostProtocol, doubleClick, true, true).name != nil
+        else { return false }
+        Self.observeLinkQueries(appID: appID)
+        let pending = QuickLookLinkHandoff.Pending(source: source, target: url, created: Date())
+        Self.pendingLink = pending
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in
+            DispatchQueue.main.async {
+                if Self.pendingLink?.created == pending.created { Self.pendingLink = nil }
+                NSSound.beep()
+            }
+        } as AnyObject
+        _ = proxy.perform(doubleClick)
+        return true
+    }
+
+    private static func observeLinkQueries(appID: String) {
+        guard queryObserver == nil else { return }
+        queryObserver = DistributedNotificationCenter.default().addObserver(
+            forName: QuickLookLinkHandoff.notification("query", appID: appID),
+            object: nil, queue: .main
+        ) { note in
+            guard let query = QuickLookLinkHandoff.decode(QuickLookLinkHandoff.Query.self, object: note.object)
+            else { return }
+            MainActor.assumeIsolated {
+                guard let target = pendingLink?.target(for: query.source) else { return }
+                pendingLink = nil
+                let reply = QuickLookLinkHandoff.Reply(id: query.id, target: target)
+                DistributedNotificationCenter.default().postNotificationName(
+                    QuickLookLinkHandoff.notification("reply", appID: appID),
+                    object: QuickLookLinkHandoff.encode(reply), userInfo: nil, deliverImmediately: true
+                )
+            }
+        }
+    }
 
     override func loadView() {
         let rootView = NSView()
@@ -613,7 +676,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
     }
 
     func preparePreviewOfFile(at url: URL) async throws {
+        previewedFileURL = nil
         let text = try String(contentsOf: url, encoding: .utf8)
+        previewedFileURL = url.standardizedFileURL
         let appearanceMode = AppearanceMode.current
         let colorScheme: MarkdownHTML.ColorScheme
         switch appearanceMode {
@@ -697,6 +762,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
 
         decisionHandler(.cancel)
         if ExternalOpenScheme.isQuickLookHandOff(url), handOffToApp(url) { return }
+        if ExternalOpenScheme.isQuickLookHandOff(url), launchAppViaPreviewHost(url) { return }
         rejectLink()
     }
 
@@ -707,7 +773,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController, WKN
               extensionID.hasSuffix(".quick-look")
         else { return false }
         let appID = String(extensionID.dropLast(".quick-look".count))
-        guard !NSRunningApplication.runningApplications(withBundleIdentifier: appID).isEmpty else { return false }
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: appID)
+            .contains(where: \.isFinishedLaunching) else { return false }
         DistributedNotificationCenter.default().postNotificationName(
             ExternalOpenScheme.quickLookOpenNotification(appBundleIdentifier: appID),
             object: url.absoluteString,

@@ -106,11 +106,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         WhatsNewWindow.noteLaunch()
+        observeQuickLookLinks()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         CrashReporter.start()
-        observeQuickLookLinks()
         let storedAppearance = AppearanceMode.migrateLegacyValue()
         ThemePreset.migrateLegacyValues()
         let appearanceMode = ThemePreset.applied().requiredAppearance ?? storedAppearance
@@ -205,6 +205,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.application(NSApp, open: [url])
             }
         }
+    }
+
+    /// Finder opens through NSDocumentController, before the app has finished
+    /// launching. Keep the startup picker out of the brief preview-link query.
+    func beginQuickLookHandoff() {
+        didReceiveOpenURLsDuringLaunch = true
+        cancelScheduledDocumentPrompt()
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
