@@ -221,6 +221,9 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
     }
     private var loadedFingerprint: RendererFingerprint?
     private var isPageReady = false
+    private var loadedNavigation: WKNavigation?
+    // nil identifies the speculative empty shell, never a displayed document.
+    private var loadedNavigationGeneration: UInt64?
     // Bumped on every display() call so a slower render finishing after a
     // newer one is dropped instead of clobbering the latest article.
     private var renderGeneration: UInt64 = 0
@@ -243,6 +246,7 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
 
     override init(frame frameRect: NSRect) {
         let config = WKWebViewConfiguration()
+        Self.setRendererProcessName(in: config)
         config.setURLSchemeHandler(assetScheme, forURLScheme: MarkdownAssetScheme.scheme)
         config.userContentController.addUserScript(Self.disableContextMenuScript)
         config.userContentController.add(messageBridge, name: HostBridge.name)
@@ -352,10 +356,21 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
             mermaid: rendered.containsMermaid,
             code: rendered.containsCode
         )
-        webView.loadHTMLString(rendered.html, baseURL: nil)
+        loadedNavigationGeneration = nil
+        loadedNavigation = webView.loadHTMLString(rendered.html, baseURL: nil)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Activity Monitor otherwise labels our generated about:blank pages
+    /// "about:". This optional WebKit SPI changes only that diagnostic name.
+    private static func setRendererProcessName(in configuration: WKWebViewConfiguration) {
+        let selector = NSSelectorFromString("_setProcessDisplayName:")
+        guard configuration.responds(to: selector) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, NSString) -> Void
+        let setter = unsafeBitCast(configuration.method(for: selector), to: Setter.self)
+        setter(configuration, selector, "Markdown Renderer")
+    }
 
     /// Reader fonts are all system fonts, and DOMPurify strips page styles,
     /// so pages never need user-installed fonts. Turning them off stops WebKit
@@ -513,24 +528,33 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
                 ],
                 in: nil,
                 in: .page
-            ) { [weak self] _ in
+            ) { [weak self] result in
+                guard let self, self.renderGeneration == generation else { return }
+                guard case .success(let updated) = result, (updated as? Bool) == true else {
+                    // A terminated or unavailable shell must still open the
+                    // document through the ordinary full-navigation path.
+                    self.discardLoadedPage()
+                    self.applyDisplay(rendered, generation: generation)
+                    return
+                }
                 #if !QUICK_LOOK_EXTENSION
-                self?.applyThemeColors()
+                self.applyThemeColors()
                 #endif
-                self?.contentDidReplace?()
+                self.contentDidReplace?()
             }
             return
         }
 
+        loadedNavigationGeneration = generation
         #if DEBUG
         let loadStartedAt = DispatchTime.now().uptimeNanoseconds
-        webView.loadHTMLString(rendered.html, baseURL: nil)
+        loadedNavigation = webView.loadHTMLString(rendered.html, baseURL: nil)
         let loadReturnedAt = DispatchTime.now().uptimeNanoseconds
         Logger.perf.debug(
             "[mdp-perf-swift] loadHTMLString call +\(Self.debugMilliseconds(from: loadStartedAt, to: loadReturnedAt), privacy: .public)ms"
         )
         #else
-        webView.loadHTMLString(rendered.html, baseURL: nil)
+        loadedNavigation = webView.loadHTMLString(rendered.html, baseURL: nil)
         #endif
         loadedFingerprint = fingerprint
         isPageReady = false
@@ -555,6 +579,8 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
     func discardLoadedPage() {
         loadedFingerprint = nil
         isPageReady = false
+        loadedNavigation = nil
+        loadedNavigationGeneration = nil
     }
 
     /// User theme colors read at render time. The Quick Look extension
@@ -1582,6 +1608,7 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let loadedNavigation, navigation === loadedNavigation else { return }
         configureWebKitScrollView()
         isPageReady = true
         updateChromeZoom()
@@ -1591,7 +1618,11 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
         // CSS. Re-assert the current theme on the fresh page.
         applyThemeColors()
         #endif
-        contentDidReplace?()
+        // An empty shell can finish after display() was requested but before
+        // its render completes. It must not dismiss the document snapshot.
+        if let generation = loadedNavigationGeneration, generation == renderGeneration {
+            contentDidReplace?()
+        }
     }
 
     private func sameDocumentFragmentID(from url: URL) -> String? {

@@ -37,6 +37,7 @@ final class MarkdownDocumentController: NSDocumentController {
         _ openPanel: NSOpenPanel,
         forTypes inTypes: [String]?
     ) async -> Int {
+        let prewarming = ReaderPrewarming.shared.begin()
         openPanel.allowsMultipleSelection = false
         openPanel.canChooseDirectories = true
         openPanel.canChooseFiles = true
@@ -52,6 +53,7 @@ final class MarkdownDocumentController: NSDocumentController {
             DocumentWindowController.markNextWindowAsTab()
         }
         let response = await super.beginOpenPanel(openPanel, forTypes: inTypes)
+        ReaderPrewarming.shared.finish(prewarming, accepted: response == NSApplication.ModalResponse.OK.rawValue)
         if response == NSApplication.ModalResponse.cancel.rawValue {
             clearPendingPanelTabOpen()
         }

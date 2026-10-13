@@ -83,7 +83,7 @@ final class ContentViewController: NSViewController {
         container.translatesAutoresizingMaskIntoConstraints = false
         view = container
 
-        webView = MarkdownWebView()
+        webView = ReaderPrewarming.shared.take()
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.heightDidChange = { [weak self] _ in
             guard let self else { return }
