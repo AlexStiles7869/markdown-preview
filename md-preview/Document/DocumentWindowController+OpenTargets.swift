@@ -10,11 +10,60 @@ import Cocoa
 extension DocumentWindowController {
     // MARK: - Open
 
-    /// Re-resolves the default hand-off app after Settings changes it.
+    /// Resolve labels/icons after the document has reached the DOM. Coalesce
+    /// repeated refreshes and resolve candidates once for all visible items.
     func refreshOpenTargets() {
-        refreshOpenWithItem()
-        refreshOpenInLLMItem()
-        refreshOpenActionsItem()
+        guard hasLoadedDocumentContent, !openTargetRefreshScheduled else { return }
+        openTargetRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.openTargetRefreshScheduled = false
+            let visible = Set(self.documentWindow.toolbar?.items.map(\.itemIdentifier) ?? [])
+            let needsEditors = visible.contains(.openActions) || visible.contains(.openWith)
+            let needsLLMs = visible.contains(.openActions) || visible.contains(.openInLLM)
+            guard needsEditors || needsLLMs else { return }
+            let choices = OpenTargetChoices(fileURL: self.currentFileURL,
+                                            needsEditors: needsEditors, needsLLMs: needsLLMs)
+            if visible.contains(.openWith) { self.refreshOpenWithItem(choices) }
+            if visible.contains(.openInLLM) { self.refreshOpenInLLMItem(choices) }
+            if visible.contains(.openActions) { self.refreshOpenActionsItem(choices) }
+        }
+    }
+
+    private func lazyOpenTargetMenu(_ identifier: NSToolbarItem.Identifier) -> NSMenu {
+        let menu = NSMenu()
+        menu.identifier = NSUserInterfaceItemIdentifier(identifier.rawValue)
+        menu.delegate = self
+        return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let contents: NSMenu
+        switch menu.identifier?.rawValue {
+        case NSToolbarItem.Identifier.openActions.rawValue:
+            let choices = OpenTargetChoices(fileURL: currentFileURL)
+            contents = buildOpenActionsMenu(editorCandidates: choices.editors,
+                                              llmCandidates: choices.llms,
+                                              defaultAction: choices.defaultAction)
+        case NSToolbarItem.Identifier.openInLLM.rawValue:
+            let choices = OpenTargetChoices(fileURL: currentFileURL, needsEditors: false)
+            contents = buildOpenInLLMMenu(candidates: choices.llms, defaultTarget: choices.defaultLLM)
+        case NSToolbarItem.Identifier.openWith.rawValue:
+            let choices = OpenTargetChoices(fileURL: currentFileURL, needsLLMs: false)
+            contents = buildOpenWithMenu(candidates: choices.editors, defaultEditor: choices.defaultEditor)
+        default:
+            return
+        }
+        menu.removeAllItems()
+        for item in contents.items {
+            contents.removeItem(item)
+            menu.addItem(item)
+        }
+    }
+
+    func documentContentDidLoad() {
+        hasLoadedDocumentContent = true
+        refreshOpenTargets()
     }
 
     func makeOpenActionsItem() -> NSToolbarItem {
@@ -26,21 +75,15 @@ extension DocumentWindowController {
         item.target = self
         item.action = #selector(openActionsPrimaryAction(_:))
         item.showsIndicator = true
+        item.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)
+        item.menu = lazyOpenTargetMenu(.openActions)
         openActionsItem = item
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         return item
     }
 
-    func refreshOpenActionsItem() {
-        let editors = currentFileURL.map { editorCandidates(for: $0) } ?? []
-        let defaultEditor = resolveDefaultEditor(among: editors)
-        let llmApps = llmCandidates()
-        let defaultLLM = resolveDefaultLLM(among: llmApps)
-        let defaultAction = resolveDefaultOpenAction(editors: editors,
-                                                     defaultEditor: defaultEditor,
-                                                     llmApps: llmApps,
-                                                     defaultLLM: defaultLLM)
-
+    private func refreshOpenActionsItem(_ choices: OpenTargetChoices) {
+        let defaultAction = choices.defaultAction
         let primaryTitle = openActionsTitle(for: defaultAction)
 
         openActionsItem?.label = NSLocalizedString("Open", comment: "Open toolbar item label")
@@ -49,9 +92,6 @@ extension DocumentWindowController {
             "Open document in another app",
             comment: "Open toolbar item tooltip"
         )
-        openActionsItem?.menu = buildOpenActionsMenu(editorCandidates: editors,
-                                                     llmCandidates: llmApps,
-                                                     defaultAction: defaultAction)
     }
 
     private func openActionsTitle(for selection: OpenActionSelection?) -> String? {
@@ -207,18 +247,20 @@ extension DocumentWindowController {
         item.target = self
         item.action = #selector(openInLLMPrimaryAction(_:))
         item.showsIndicator = true
+        item.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        item.menu = lazyOpenTargetMenu(.openInLLM)
         openInLLMItem = item
-        refreshOpenInLLMItem()
+        refreshOpenTargets()
         return item
     }
 
-    func refreshOpenInLLMItem() {
-        let candidates = llmCandidates()
+    private func refreshOpenInLLMItem(_ choices: OpenTargetChoices) {
+        let candidates = choices.llms
         guard !candidates.isEmpty else {
             removeOpenInLLMToolbarItem()
             return
         }
-        let resolvedDefault = resolveDefaultLLM(among: candidates)
+        let resolvedDefault = choices.defaultLLM
         let openInTitle = resolvedDefault.map { localizedOpenIn($0.target.title) }
         openInLLMItem?.label = openInTitle ?? NSLocalizedString("Open in LLM", comment: "Open in LLM toolbar item label")
         openInLLMItem?.image = openInLLMImage(for: resolvedDefault)
@@ -226,8 +268,6 @@ extension DocumentWindowController {
             "Open document in an LLM app",
             comment: "Open in LLM toolbar item tooltip"
         )
-        openInLLMItem?.menu = buildOpenInLLMMenu(candidates: candidates,
-                                                 defaultTarget: resolvedDefault)
     }
 
     private func removeOpenInLLMToolbarItem() {
@@ -308,8 +348,7 @@ extension DocumentWindowController {
               let candidate = llmCandidates().first(where: { $0.target.id == targetID }),
               let fileURL = currentFileURL else { return }
         OpenTargetCatalog.setDefaultLLM(candidate)
-        refreshOpenInLLMItem()
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         openInLLM(candidate, fileURL: fileURL)
     }
 
@@ -483,14 +522,15 @@ extension DocumentWindowController {
         item.target = self
         item.action = #selector(openWithPrimaryAction(_:))
         item.showsIndicator = true
+        item.image = openWithImage(for: nil)
+        item.menu = lazyOpenTargetMenu(.openWith)
         openWithItem = item
-        refreshOpenWithItem()
+        refreshOpenTargets()
         return item
     }
 
-    func refreshOpenWithItem() {
-        let candidates = currentFileURL.map { editorCandidates(for: $0) } ?? []
-        let resolvedDefault = resolveDefaultEditor(among: candidates)
+    private func refreshOpenWithItem(_ choices: OpenTargetChoices) {
+        let resolvedDefault = choices.defaultEditor
         let openInTitle = resolvedDefault.map { localizedOpenIn(displayName(for: $0.url)) }
         openWithItem?.label = openInTitle ?? NSLocalizedString("Open With", comment: "Open With toolbar item label")
         openWithItem?.image = openWithImage(for: resolvedDefault?.url)
@@ -498,8 +538,6 @@ extension DocumentWindowController {
             "Open in another editor",
             comment: "Open With toolbar item tooltip"
         )
-        openWithItem?.menu = buildOpenWithMenu(candidates: candidates,
-                                               defaultEditor: resolvedDefault)
     }
 
     func openWithImage(for url: URL?) -> NSImage {
@@ -591,8 +629,7 @@ extension DocumentWindowController {
         guard let candidate = sender.representedObject as? EditorCandidate,
               let fileURL = currentFileURL else { return }
         OpenTargetCatalog.setDefaultEditor(candidate)
-        refreshOpenWithItem()
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         launch(fileURL, with: candidate.url)
     }
 
@@ -602,5 +639,26 @@ extension DocumentWindowController {
             withApplicationAt: appURL,
             configuration: NSWorkspace.OpenConfiguration()
         ) { _, _ in }
+    }
+}
+
+/// A per-refresh value, not a persistent cache: app installations and user
+/// defaults are re-read whenever the user opens a menu or refreshes settings.
+private struct OpenTargetChoices {
+    let editors: [EditorCandidate]
+    let llms: [LLMCandidate]
+    let defaultEditor: EditorCandidate?
+    let defaultLLM: LLMCandidate?
+
+    init(fileURL: URL?, needsEditors: Bool = true, needsLLMs: Bool = true) {
+        editors = needsEditors ? fileURL.map(OpenTargetCatalog.editorCandidates(for:)) ?? [] : []
+        llms = needsLLMs ? OpenTargetCatalog.llmCandidates() : []
+        defaultEditor = needsEditors ? OpenTargetCatalog.resolveDefaultEditor(among: editors) : nil
+        defaultLLM = needsLLMs ? OpenTargetCatalog.resolveDefaultLLM(among: llms) : nil
+    }
+
+    var defaultAction: OpenActionSelection? {
+        OpenTargetCatalog.resolveDefaultOpenAction(editors: editors, defaultEditor: defaultEditor,
+                                                   llmApps: llms, defaultLLM: defaultLLM)
     }
 }

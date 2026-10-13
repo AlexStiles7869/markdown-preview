@@ -102,6 +102,11 @@ final class ContentViewController: NSViewController {
             self?.applyPendingScrollAnchorIfNeeded()
             self?.updatePointerTracking()
             guard let self, self.webView.hasRequestedDocument else { return }
+            Logger.perf.debug(
+                "[mdp-perf-open] document-loaded t=\(DispatchTime.now().uptimeNanoseconds, privacy: .public)"
+            )
+            (self.view.window?.windowController as? DocumentWindowController)?
+                .documentContentDidLoad()
             self.handleFirstDocumentPaint()
         }
         NotificationCenter.default.addObserver(self, selector: #selector(updatePointerTracking),
@@ -439,8 +444,9 @@ final class ContentViewController: NSViewController {
         )
     }
 
-    /// Two animation frames after the first document reached the DOM, its
-    /// frame is on screen: the snapshot can go, and a new one can be saved.
+    /// Allow two animation frames after the document reaches the DOM before
+    /// retiring the snapshot. This is not a compositor-presentation fence;
+    /// WebKit can suspend the callbacks while the window is occluded.
     private func handleFirstDocumentPaint() {
         guard !didHandleFirstDocumentPaint else { return }
         didHandleFirstDocumentPaint = true

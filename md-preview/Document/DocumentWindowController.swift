@@ -126,6 +126,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     var toolbarPreferenceObservations: [NSKeyValueObservation] = []
     /// Timestamp of the last click handled by the sidebar mode picker.
     var sidebarToolbarHandledEventTimestamp: TimeInterval?
+    var hasLoadedDocumentContent = false
+    var openTargetRefreshScheduled = false
     var findBar: FindBar?
     /// Container for the find bar. A content overlay like editBar — not a
     /// titlebar accessory — so showing it never pushes the tab bar down.
@@ -383,20 +385,16 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
                 .showSnapshot(pendingSnapshot)
         }
         documentWindow.makeKeyAndOrderFront(nil)
-        #if DEBUG
         Logger.perf.debug(
             "[mdp-perf-open] window-shown t=\(DispatchTime.now().uptimeNanoseconds, privacy: .public)"
         )
-        #endif
         // Tab placement is settled once the window is shown; a window opened
         // via "Open in New Window" goes back to normal tabbing afterwards
         // (it can host or join tabs on explicit request, but plain opens no
         // longer recapture it).
         documentWindow.tabbingMode = .automatic
         NSApp.activate()
-        refreshOpenWithItem()
-        refreshOpenInLLMItem()
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         updateEditToolbarItem()
         // Folder and untitled windows count too.
         WhatsNewWindow.presentIfNeeded(over: documentWindow)
@@ -405,6 +403,8 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
             renderCurrentDocument(text: markdown, fileURL: fileURL)
             startWatching(fileURL)
             offerToBecomeDefaultHandlerIfNeeded()
+        } else {
+            documentContentDidLoad()
         }
     }
 
@@ -460,9 +460,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         documentWindow.makeKeyAndOrderFront(nil)
         NSApp.activate()
         NSDocumentController.shared.noteNewRecentDocumentURL(url)
-        refreshOpenWithItem()
-        refreshOpenInLLMItem()
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         updateEditToolbarItem()
         // History restore wins over the link fragment — back/forward returns
         // to where the user actually was.
@@ -556,8 +554,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         documentWindow.title = newURL.lastPathComponent
         updateWindowSubtitle()
         NSDocumentController.shared.noteNewRecentDocumentURL(newURL)
-        refreshOpenWithItem()
-        refreshOpenActionsItem()
+        refreshOpenTargets()
         startWatching(newURL)
         if let markdown = currentMarkdown {
             (documentWindow.contentViewController as? MainSplitViewController)?

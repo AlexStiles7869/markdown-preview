@@ -191,7 +191,7 @@ extension DocumentWindowController {
         currentMarkdown = text
         resetAutoSaveFeedback()
         updateWindowSubtitle()
-        refreshOpenInLLMItem()
+        refreshOpenTargets()
         updateEditToolbarItem()
         markdownDocument?.replaceContents(markdown: text, fileURL: fileURL)
         renderCurrentDocument(text: text, fileURL: fileURL)
