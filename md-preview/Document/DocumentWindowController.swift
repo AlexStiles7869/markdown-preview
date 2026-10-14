@@ -127,6 +127,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// Timestamp of the last click handled by the sidebar mode picker.
     var sidebarToolbarHandledEventTimestamp: TimeInterval?
     var findBar: FindBar?
+    /// Toolbar menus are filled when they open (`menuNeedsUpdate`), keyed
+    /// by menu identity, so building them — app icons included — never
+    /// shares the launch turn with the first frame.
+    var deferredToolbarMenuBuilders: [ObjectIdentifier: () -> NSMenu] = [:]
+    private(set) var isToolbarAttached = false
     /// Container for the find bar. A content overlay like editBar — not a
     /// titlebar accessory — so showing it never pushes the tab bar down.
     /// Mounted once at setup and toggled via isHidden.
@@ -147,6 +152,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     }
 
     init() {
+        let signpost = LaunchSignposts.begin("makeWindow")
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -158,6 +164,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         window.allowsToolTipsWhenApplicationIsInactive = false
         super.init(window: window)
         setupWindow()
+        LaunchSignposts.end(signpost)
     }
 
     required init?(coder: NSCoder) {
@@ -214,27 +221,39 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         documentWindow.setContentSize(NSSize(width: 1100, height: 720))
         documentWindow.center()
         documentWindow.setFrameAutosaveName("MainWindow")
-
-        // AppKit broadcasts item mutations between toolbars with a shared ID.
-        // Collapse is per-window, so share saved preferences, not live items.
-        let toolbar = NSToolbar(identifier: "MainToolbar-\(UUID().uuidString)")
-        toolbar.delegate = self
-        toolbar.displayMode = .iconOnly
-        toolbar.allowsUserCustomization = true
-        toolbar.autosavesConfiguration = false
-        documentWindow.toolbar = toolbar
-        if let saved = UserDefaults.standard.dictionary(forKey: "MainToolbar.configuration")
-            ?? UserDefaults.standard.dictionary(forKey: "NSToolbar Configuration MainToolbar") {
-            toolbar.setConfiguration(saved)
-        }
-        documentWindow.toolbarStyle = .automatic
-        restoreToolbarItemOrder(toolbar)
-        replaceZoomToolbarItemIfNeeded(in: toolbar)
-        migrateLegacySidebarToolbarIfNeeded(in: toolbar)
-        observeAndPersistToolbarPreferences(toolbar)
-
-        installFindBar()
         applyWindowBackgroundTheme()
+    }
+
+    /// The toolbar is attached by `display(markdown:fileURL:)`, after the
+    /// document's render has been handed to WebKit, so the ~100 ms of item
+    /// construction overlaps the web process starting up instead of
+    /// preceding it. It also runs with `currentFileURL` set, so the Open
+    /// item resolves its default app once instead of twice.
+    func attachToolbarIfNeeded() {
+        guard !isToolbarAttached else { return }
+        isToolbarAttached = true
+        LaunchSignposts.interval("attachToolbar") {
+            // AppKit broadcasts item mutations between toolbars with a shared ID.
+            // Collapse is per-window, so share saved preferences, not live items.
+            let toolbar = NSToolbar(identifier: "MainToolbar-\(UUID().uuidString)")
+            toolbar.delegate = self
+            toolbar.displayMode = .iconOnly
+            toolbar.allowsUserCustomization = true
+            toolbar.autosavesConfiguration = false
+            documentWindow.toolbar = toolbar
+            if let saved = UserDefaults.standard.dictionary(forKey: "MainToolbar.configuration")
+                ?? UserDefaults.standard.dictionary(forKey: "NSToolbar Configuration MainToolbar") {
+                toolbar.setConfiguration(saved)
+            }
+            documentWindow.toolbarStyle = .automatic
+            restoreToolbarItemOrder(toolbar)
+            replaceZoomToolbarItemIfNeeded(in: toolbar)
+            migrateLegacySidebarToolbarIfNeeded(in: toolbar)
+            observeAndPersistToolbarPreferences(toolbar)
+            // A sidebar hidden before the toolbar existed (untitled
+            // documents) has not collapsed its toolbar items yet.
+            syncSidebarToolbarState()
+        }
     }
 
     /// Applies the user's theme colors to this window: the native window
@@ -289,6 +308,19 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         updateFullscreenToolbarTheme()
     }
 
+    /// `NSDocument.showWindows()` calls this after `display(markdown:fileURL:)`
+    /// has already ordered the window front. AppKit's implementation would
+    /// still run its tab-placement search (a window-server query, ~30 ms on
+    /// the launch turn) and the Quick Look seamless-open check for a window
+    /// that is already on screen.
+    override func showWindow(_ sender: Any?) {
+        if let window, window.isVisible {
+            window.makeKeyAndOrderFront(sender)
+            return
+        }
+        super.showWindow(sender)
+    }
+
     /// AppKit's automatic tab placement runs when NSDocument shows its
     /// windows — but this controller orders the window front itself (from
     /// makeWindowControllers, before showWindows), so the window is already
@@ -301,6 +333,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     func attachToExistingTabGroupIfNeeded() {
         guard !documentWindow.isVisible,
               documentWindow.tabbingMode != .disallowed,
+              // `orderedWindows` asks the window server; `windows` does not.
+              // The first window of a launch has no host to join.
+              NSApp.windows.contains(where: {
+                  $0 !== documentWindow && $0.isVisible
+                      && $0.tabbingIdentifier == documentWindow.tabbingIdentifier
+              }),
               let host = ([NSApp.mainWindow] + NSApp.orderedWindows)
                   .compactMap({ $0 })
                   .first(where: {
@@ -366,6 +404,11 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// A saved image of the document, decoding while the window is built.
     var pendingSnapshot: DocumentSnapshotCache.Prefetch?
 
+    /// First show of a window. Ordered for the first frame: the document's
+    /// HTML goes to WebKit first (so the web process starts while the
+    /// toolbar is built), the toolbar is attached, the window is ordered
+    /// front and its frame committed at once, and everything the frame does
+    /// not show waits for the next run-loop turn.
     func display(markdown: String, fileURL: URL?) {
         currentFileURL = fileURL
         currentMarkdown = markdown
@@ -376,13 +419,27 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         documentWindow.title = fileURL?.lastPathComponent
             ?? NSLocalizedString("Untitled", comment: "Window title when no document is open")
         updateWindowSubtitle()
+        if let fileURL {
+            LaunchSignposts.interval("renderBeforeShow") {
+                renderCurrentDocument(text: markdown, fileURL: fileURL, renderImmediately: true)
+            }
+        }
+        attachToolbarIfNeeded()
         attachToExistingTabGroupIfNeeded()
         if let pendingSnapshot {
             self.pendingSnapshot = nil
             (documentWindow.contentViewController as? MainSplitViewController)?
                 .showSnapshot(pendingSnapshot)
         }
-        documentWindow.makeKeyAndOrderFront(nil)
+        LaunchSignposts.interval("orderFront") {
+            documentWindow.makeKeyAndOrderFront(nil)
+        }
+        // The rest of this run-loop turn (the document controller finishing
+        // the open, applicationDidFinishLaunching on a Finder launch) would
+        // otherwise hold the frame back by 150–250 ms.
+        LaunchSignposts.interval("commitFirstFrame") {
+            CATransaction.flush()
+        }
         #if DEBUG
         Logger.perf.debug(
             "[mdp-perf-open] window-shown t=\(DispatchTime.now().uptimeNanoseconds, privacy: .public)"
@@ -394,17 +451,59 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         // longer recapture it).
         documentWindow.tabbingMode = .automatic
         NSApp.activate()
-        refreshOpenWithItem()
-        refreshOpenInLLMItem()
-        refreshOpenActionsItem()
-        updateEditToolbarItem()
-        // Folder and untitled windows count too.
-        WhatsNewWindow.presentIfNeeded(over: documentWindow)
         if let fileURL {
-            NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
-            renderCurrentDocument(text: markdown, fileURL: fileURL)
+            // Before the pump: a save that lands while the first window
+            // waits for WebKit must still reach the preview, and the watcher
+            // only reports changes made after it starts.
             startWatching(fileURL)
-            offerToBecomeDefaultHandlerIfNeeded()
+            LaunchSignposts.interval("pumpWebKit") { pumpRunLoopForWebKitStartup() }
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.finishFirstShow(fileURL: fileURL)
+        }
+    }
+
+    private static var didPumpForFirstWindow = false
+
+    /// Runs the main run loop in place until the first page has painted or
+    /// 450 ms have passed. Deliberate, and a hack.
+    ///
+    /// The document's HTML went to WebKit before the toolbar was built, and
+    /// WebKit's helper processes are up ~55 ms later. But every step after
+    /// that — their ready messages, the RunningBoard assertions WebKit takes
+    /// for each of them, the navigation policy round trip — is delivered to
+    /// the main run loop, and the launch turn that created this window
+    /// still has 150–250 ms to go (the document controller's completion,
+    /// applicationDidFinishLaunching, the rest of AppKit's launch sequence).
+    /// Running the loop here lets WebKit use that time instead of waiting
+    /// for it. The frame is already committed, so nothing visible waits;
+    /// input is not read because AppKit pulls events itself, outside the
+    /// run loop sources. Only the first window of a launch does this.
+    private func pumpRunLoopForWebKitStartup() {
+        guard !Self.didPumpForFirstWindow else { return }
+        Self.didPumpForFirstWindow = true
+        guard let split = documentWindow.contentViewController as? MainSplitViewController else { return }
+        let deadline = CFAbsoluteTimeGetCurrent() + 0.45
+        while !split.hasPaintedFirstDocument {
+            let remaining = deadline - CFAbsoluteTimeGetCurrent()
+            guard remaining > 0 else { break }
+            let result = CFRunLoopRunInMode(.defaultMode, min(0.05, remaining), true)
+            if result == .stopped || result == .finished { break }
+        }
+    }
+
+    /// Work that follows the first frame: nothing here changes what the
+    /// frame already shows (the toolbar items were built with the file URL
+    /// in hand), so it can take the next turn.
+    private func finishFirstShow(fileURL: URL?) {
+        LaunchSignposts.interval("postShow") {
+            updateEditToolbarItem()
+            // Folder and untitled windows count too.
+            WhatsNewWindow.presentIfNeeded(over: documentWindow)
+            if let fileURL {
+                NSDocumentController.shared.noteNewRecentDocumentURL(fileURL)
+                offerToBecomeDefaultHandlerIfNeeded()
+            }
         }
     }
 

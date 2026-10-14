@@ -102,6 +102,7 @@ final class ContentViewController: NSViewController {
             self?.applyPendingScrollAnchorIfNeeded()
             self?.updatePointerTracking()
             guard let self, self.webView.hasRequestedDocument else { return }
+            LaunchSignposts.event("domReady")
             self.handleFirstDocumentPaint()
         }
         NotificationCenter.default.addObserver(self, selector: #selector(updatePointerTracking),
@@ -199,7 +200,8 @@ final class ContentViewController: NSViewController {
     func display(
         markdown: String,
         sourceURL: URL?,
-        assetBaseURL: URL? = nil
+        assetBaseURL: URL? = nil,
+        renderImmediately: Bool = false
     ) {
         if !webView.hasRequestedDocument, let sourceURL {
             snapshotSource = (sourceURL, DocumentSnapshotCache.hash(markdown))
@@ -219,9 +221,15 @@ final class ContentViewController: NSViewController {
             scheduleNavigationTargetAttempt()
         }
         resetScrollspy()
-        webView.display(markdown: markdown, assetBaseURL: assetBaseURL)
+        webView.display(markdown: markdown, assetBaseURL: assetBaseURL,
+                        renderImmediately: renderImmediately)
         scheduleHeadingOffsetsRefresh()
     }
+
+    /// True once the first document's frame has been presented (two
+    /// animation frames after it reached the DOM). The launch pump in
+    /// DocumentWindowController stops on it.
+    private(set) var hasPaintedFirstDocument = false
 
     func clearContent() {
         exportSource = nil
@@ -447,12 +455,22 @@ final class ContentViewController: NSViewController {
         webView.webView.callAsyncJavaScript(
             "await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));",
             arguments: [:], in: nil, in: .page
-        ) { [weak self] _ in
+        ) { [weak self] result in
+            // A failed wait (the page went away, a script error) is not a
+            // paint: keep the first-window pump waiting for its deadline and
+            // save no image of an unpainted page. The snapshot still comes
+            // off, as it always did, so the page is not hidden behind it.
+            guard case .success = result else {
+                self?.removeSnapshotOverlay()
+                return
+            }
             #if DEBUG
             Logger.perf.debug(
                 "[mdp-perf-open] painted t=\(DispatchTime.now().uptimeNanoseconds, privacy: .public) wall=\(Date().timeIntervalSince1970, privacy: .public) snapshot=\(self?.snapshotOverlay != nil, privacy: .public)"
             )
             #endif
+            LaunchSignposts.event("webPaint")
+            self?.hasPaintedFirstDocument = true
             self?.removeSnapshotOverlay()
             self?.saveSnapshotIfNeeded()
         }

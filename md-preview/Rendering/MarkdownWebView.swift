@@ -247,6 +247,7 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
         config.userContentController.addUserScript(Self.disableContextMenuScript)
         config.userContentController.add(messageBridge, name: HostBridge.name)
         Self.disableUserInstalledFonts(in: config.preferences)
+        Self.keepDOMRenderingInWebContentProcess(in: config.preferences)
         let previewWebView = PreviewWKWebView(frame: .zero, configuration: config)
         webView = previewWebView
         super.init(frame: frameRect)
@@ -369,6 +370,38 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
         setter(preferences, selector, false)
     }
 
+    /// WebKit on macOS 14+ composites the page in a separate GPU process by
+    /// default. For a page that does nothing but lay out text, that puts a
+    /// fourth process and its RunningBoard assertions on the path to the first
+    /// paint: in a minimal host the text appeared 460 ms after the window
+    /// with the GPU process in the loop and 220 ms without it. The flags are
+    /// WebKit "experimental features", reached through private selectors, so
+    /// every call is guarded and `MarkdownPreview.gpuProcessRendering YES`
+    /// restores the default.
+    private static func keepDOMRenderingInWebContentProcess(in preferences: WKPreferences) {
+        guard !UserDefaults.standard.bool(forKey: "MarkdownPreview.gpuProcessRendering") else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool, AnyObject) -> Void
+        let groups: [(list: String, setter: String, keys: Set<String>)] = [
+            ("_experimentalFeatures", "_setEnabled:forExperimentalFeature:",
+             ["UseGPUProcessForDOMRenderingEnabled", "UseGPUProcessForCanvasRenderingEnabled"]),
+            ("_internalDebugFeatures", "_setEnabled:forInternalDebugFeature:",
+             ["UseGPUProcessForWebGLEnabled"]),
+        ]
+        for group in groups {
+            let listSelector = NSSelectorFromString(group.list)
+            let setSelector = NSSelectorFromString(group.setter)
+            guard (WKPreferences.self as AnyObject).responds(to: listSelector),
+                  preferences.responds(to: setSelector),
+                  let features = (WKPreferences.self as AnyObject).perform(listSelector)?
+                      .takeUnretainedValue() as? [AnyObject] else { continue }
+            let setter = unsafeBitCast(preferences.method(for: setSelector), to: Setter.self)
+            for feature in features
+            where group.keys.contains((feature.value(forKey: "key") as? String) ?? "") {
+                setter(preferences, setSelector, false, feature)
+            }
+        }
+    }
+
     /// True once any `display()` has been requested.
     var hasRequestedDocument: Bool { renderGeneration > 0 }
 
@@ -404,7 +437,13 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
             ?? MarkdownAssetResolution.rootBaseHref
     }
 
-    func display(markdown: String, assetBaseURL: URL? = nil) {
+    /// Documents up to this size are rendered on the calling thread when
+    /// `renderImmediately` is set: a few milliseconds of cmark, in exchange
+    /// for WebKit starting its process and page load before the window is
+    /// built rather than after the launch turn.
+    private static let immediateRenderByteLimit = 256 * 1024
+
+    func display(markdown: String, assetBaseURL: URL? = nil, renderImmediately: Bool = false) {
         pendingContentProcessReload?.cancel()
         pendingContentProcessReload = nil
         currentMarkdown = markdown
@@ -416,6 +455,15 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
         let generation = renderGeneration
         let contentWidth = ContentWidthSetting.current.renderWidth
         let themeOverrides = Self.currentThemeOverrides()
+        if renderImmediately, markdown.utf8.count <= Self.immediateRenderByteLimit {
+            let rendered = Self.timedRender(label: "display",
+                                            markdown: markdown,
+                                            assetBaseHref: baseHref,
+                                            contentWidth: contentWidth,
+                                            themeOverrides: themeOverrides)
+            applyDisplay(rendered, generation: generation)
+            return
+        }
         Task { @concurrent [weak self] in
             let rendered = Self.timedRender(label: "display",
                                             markdown: markdown,
@@ -531,6 +579,9 @@ final class MarkdownWebView: NSView, WKNavigationDelegate {
         )
         #else
         webView.loadHTMLString(rendered.html, baseURL: nil)
+        #endif
+        #if !QUICK_LOOK_EXTENSION
+        LaunchSignposts.event("loadHTMLString")
         #endif
         loadedFingerprint = fingerprint
         isPageReady = false
