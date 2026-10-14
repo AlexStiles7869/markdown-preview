@@ -79,3 +79,24 @@ A second diagnostic build timed these icon calls directly across six fresh proce
 The largest actionable investigations are to overlap document preparation/navigation with native window construction without gating window display, and to remove synchronous file-specific icon resolution from initial navigator layout. The search toolbar item is a smaller target. No implementation of these hypotheses or expected speedup is claimed by this profile. The 451 ms before the first callback and the 165 ms between launch callbacks also remain only coarsely characterized.
 
 Reproduction scripts, both instrumented binary hashes, raw logs, samples, stack captures, source backups, and the instrumentation patch are in `/Users/fauzaan/Desktop/Pluk/issue-492-handoff/deep-launch-audit/`. The production Swift source was restored after profiling.
+
+## Early-render experiment: rejected after verification
+
+On 2026-10-14, an experimental Release build prepared the first document's HTML while constructing its native window, then called `loadHTMLString` before sizing and installing the toolbar. A completed-result check avoided waiting for a main-actor continuation when preparation had already finished. It retained normal asynchronous rendering as a fallback and reused the initial preview during document delivery.
+
+The app and embedded Quick Look built successfully, strict deep signature verification passed, and 12 focused tests passed, including two preparation tests. On the unlocked Mac, runtime checks verified plain Markdown, the first search count and dismissal, navigation to a different document, and rich sample content including code and math. This was a targeted smoke test, not full regression coverage.
+
+A separate comparison used the same procedure above: one predefined warmup per variant, six ABBA blocks, 12 measured fresh processes per variant, snapshots disabled, Files sidebar mode, and the inspector verified collapsed before every launch. Builds and tests did not run during comparison. The baseline was the accepted lazy-UI build; the experimental source was based on `3143b2a`.
+
+| Variant | Window-request median (range) | DOM-ready median (range) |
+|---|---:|---:|
+| Accepted lazy UI | 1094.81 ms (996.64–1195.90) | 1564.78 ms (1413.63–1655.35) |
+| Early render | 1119.30 ms (1038.94–1188.28) | 1584.85 ms (1480.19–1710.60) |
+
+The candidate's medians were 24.49 ms later for the window request and 20.07 ms later for DOM readiness. Five of six paired block means were slower for both endpoints. The overlapping ranges do not establish a universal regression, but this batch provides no evidence of a speed benefit.
+
+A separate instrumented build confirmed that the intended path executed: preparation was complete when consumed, and the early `loadHTMLString` call returned before the window request in all three diagnostic launches. In the two post-warmup launches, the call returned about 183 ms and 291 ms before the window request, respectively; initial-preview setup itself took about 15 ms and 30 ms. These diagnostic runs are excluded from the comparison and are too few to estimate a stable cost. They verify earlier scheduling, not an end-to-end improvement.
+
+The experimental Swift changes were archived and removed; the accepted lazy-UI implementation remains. Starting navigation earlier did not meet the acceptance criterion, and neither batch proves a 700 ms launch or physical compositor presentation. Synchronous navigator icon lookups remain a separate measured target for investigation.
+
+Raw logs, all samples, comparison and diagnostic runners, executable hashes, a tracked-file patch, and complete experimental source (including new files) are archived at `/Users/fauzaan/Desktop/Pluk/issue-492-handoff/early-render-experiment/`.
