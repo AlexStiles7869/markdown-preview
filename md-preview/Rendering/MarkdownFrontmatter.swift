@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct FrontmatterEntry: Equatable, Identifiable {
+nonisolated struct FrontmatterEntry: Equatable, Identifiable, Sendable {
     let id: Int
     let key: String
     let value: String
@@ -33,22 +33,22 @@ nonisolated enum MarkdownFrontmatter {
         case toml
     }
 
-    static func split(_ markdown: String) -> (raw: String?, format: Format?, body: String) {
+    static func split(_ markdown: String) -> (raw: String?, format: Format?, body: String, bodyLineOffset: Int) {
         let stripped = markdown.first == "\u{FEFF}" ? String(markdown.dropFirst()) : markdown
         let firstLineEnd = stripped.firstIndex(where: \.isNewline) ?? stripped.endIndex
         guard let delimiter = Delimiter(openingLine: String(stripped[..<firstLineEnd]))
-        else { return (nil, nil, markdown) }
+        else { return (nil, nil, markdown, 0) }
 
         var lines: [String] = []
         stripped.enumerateLines { line, _ in lines.append(line) }
 
         guard let close = lines.dropFirst().firstIndex(where: {
             delimiter.closes($0)
-        }) else { return (nil, nil, markdown) }
+        }) else { return (nil, nil, markdown, 0) }
 
         let raw = lines[1..<close].joined(separator: "\n")
         let body = lines[(close + 1)...].joined(separator: "\n")
-        return (raw, delimiter.format, body)
+        return (raw, delimiter.format, body, close + 1)
     }
 
     // Best-effort parse: each top-level `key: value` line becomes an entry;

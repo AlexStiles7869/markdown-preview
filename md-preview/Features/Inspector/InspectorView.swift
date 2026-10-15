@@ -6,7 +6,7 @@
 import AppKit
 import SwiftUI
 
-struct DocumentMetadata: Equatable {
+nonisolated struct DocumentMetadata: Equatable, Sendable {
     var fileName: String = ""
     var fileURL: URL?
     var wordCount: Int = 0
@@ -21,7 +21,7 @@ struct DocumentMetadata: Equatable {
 }
 
 extension DocumentMetadata {
-    static func make(url: URL?, markdown: String) -> DocumentMetadata {
+    nonisolated static func make(url: URL?, markdown: String) -> DocumentMetadata {
         var meta = DocumentMetadata()
         meta.fileURL = url
         meta.fileName = url?.lastPathComponent

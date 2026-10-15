@@ -21,4 +21,10 @@ final class InspectorViewController: NSViewController {
         loadViewIfNeeded()
         host.rootView = InspectorView(metadata: metadata)
     }
+
+    func updateFileURL(_ url: URL) {
+        metadata.fileURL = url
+        metadata.fileName = url.lastPathComponent
+        display(metadata: metadata)
+    }
 }

@@ -69,6 +69,14 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     weak var alwaysOnTopButton: NSButton?
     weak var editButton: NSButton?
     var editorChangeRevision = 0
+    // Coalesces keystrokes into periodic inspector updates.
+    var pendingInspectorRefresh: DispatchWorkItem?
+    var pendingInspectorComputation: DispatchWorkItem?
+    // Serial execution avoids concurrent full-document parses of rapid edits.
+    let inspectorComputationQueue = DispatchQueue(label: "MarkdownPreview.inspectorComputation",
+                                                  qos: .userInitiated)
+    var inspectorRefreshSessionID = UUID()
+    static let inspectorRefreshInterval: TimeInterval = 0.10
     /// In-memory source shown by preview before the user saves it.
     var editorDraftMarkdown: String?
     /// Last known on-disk source, retained while preview displays a draft.
@@ -664,6 +672,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         } else {
             loadFile(at: newURL, silentOnFailure: true)
         }
+        if isEditing { refreshInspectorAfterRename() }
     }
 
     /// Also read by `WhatsNewWindow` as a sign of earlier use.

@@ -12,7 +12,7 @@ final class SidebarViewController: NSViewController {
         case files = 1
     }
 
-    var onSelectHeading: ((Int) -> Void)?
+    var onSelectHeading: ((Int, Int) -> Void)?
     var onSelectFile: ((URL) -> Void)?
     var onModeChanged: ((Mode) -> Void)?
 
@@ -24,6 +24,8 @@ final class SidebarViewController: NSViewController {
     private var titleItem: TitleItem?
     private var lastRenderedMarkdown: String?
     private var lastRenderedFileName: String?
+    private var lastRenderedOutline: [TOCItem] = []
+    private var resetOutlineState = false
     private var loadedFolderURL: URL?
     private var pendingFolderURL: URL?
     private var pendingFileURL: URL?
@@ -136,18 +138,63 @@ final class SidebarViewController: NSViewController {
 
     func display(markdown: String, fileName: String, fileURL: URL?) {
         loadViewIfNeeded()
+        // A newly opened document must not inherit another file's outline choices.
+        if pendingFileURL != fileURL?.standardizedFileURL {
+            resetOutlineState = true
+        }
         setOpenFileURL(fileURL)
+        refreshOutline(markdown: markdown, fileName: fileName)
+    }
 
-        guard markdown != lastRenderedMarkdown || fileName != lastRenderedFileName else { return }
+    /// Full document display may parse synchronously; live edits supply a
+    /// precomputed outline so parsing stays off the main thread.
+    func refreshOutline(markdown: String, fileName: String) {
+        guard resetOutlineState || markdown != lastRenderedMarkdown || fileName != lastRenderedFileName else { return }
+        let outline = MarkdownTOC.parse(markdown)
         lastRenderedMarkdown = markdown
+        displayOutline(outline, fileName: fileName)
+    }
+
+    func refreshOutline(outline: [TOCItem], fileName: String) {
+        // Invalidate the full-source cache: its value predates this live outline.
+        lastRenderedMarkdown = nil
+        displayOutline(outline, fileName: fileName)
+    }
+
+    private func displayOutline(_ outline: [TOCItem], fileName: String) {
+        loadViewIfNeeded()
+        guard resetOutlineState || outline != lastRenderedOutline || fileName != lastRenderedFileName else { return }
+
+        // Source lines can change without altering the visible heading tree.
+        // Update click destinations in place rather than resetting outline UI.
+        if !resetOutlineState, fileName == lastRenderedFileName,
+           updateSourceLines(outline, in: roots) {
+            lastRenderedOutline = outline
+            return
+        }
+
+        // The heading structure changed; use the original default expansion behavior.
+        resetOutlineState = false
+        lastRenderedOutline = outline
         lastRenderedFileName = fileName
         titleItem = fileName.isEmpty ? nil : TitleItem(title: fileName)
-        roots = MarkdownTOC.parse(markdown).map(TOCNode.init)
+        roots = outline.map(TOCNode.init)
         outlineView.reloadData()
         for root in roots {
             outlineView.expandItem(root, expandChildren: true)
         }
         outlineView.deselectAll(nil)
+    }
+
+    /// Reuse the existing outline rows when only source locations changed.
+    private func updateSourceLines(_ items: [TOCItem], in nodes: [TOCNode]) -> Bool {
+        guard items.count == nodes.count else { return false }
+        for (item, node) in zip(items, nodes) {
+            guard item.id == node.headingID, item.level == node.level, item.title == node.title,
+                  updateSourceLines(item.children, in: node.children) else { return false }
+            node.sourceLine = item.sourceLine
+        }
+        return true
     }
 
     /// Update the tracked file URL after a rename — keeps the navigator
@@ -290,7 +337,7 @@ final class SidebarViewController: NSViewController {
     @objc private func rowClicked(_ sender: Any?) {
         let row = outlineView.clickedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? TOCNode else { return }
-        onSelectHeading?(node.headingID)
+        onSelectHeading?(node.headingID, node.sourceLine)
     }
 }
 
@@ -316,12 +363,14 @@ final class TOCNode {
     let headingID: Int
     let level: Int
     let title: String
+    var sourceLine: Int
     let children: [TOCNode]
 
     init(_ item: TOCItem) {
         self.headingID = item.id
         self.level = item.level
         self.title = item.title
+        self.sourceLine = item.sourceLine
         self.children = item.children.map(TOCNode.init)
     }
 }

@@ -322,6 +322,14 @@ final class EditorViewController: NSViewController, WKNavigationDelegate {
         }
     }
 
+    /// Navigate to a heading in the current editor source without moving the cursor.
+    func scrollToSourceLine(_ line: Int) {
+        guard line > 0 else { return }
+        webView.evaluateJavaScript(
+            "window.__mdEditor && window.__mdEditor.setScrollPosition(0, \(line), 0)"
+        ) { _, _ in }
+    }
+
     func fetchScrollAnchor(_ completion: @escaping (SourceScrollAnchor?) -> Void) {
         webView.evaluateJavaScript(
             "window.__mdEditor && window.__mdEditor.getScrollAnchor()"

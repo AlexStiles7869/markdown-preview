@@ -113,6 +113,35 @@ final class MarkdownTOCTests: XCTestCase {
         XCTAssertEqual(MarkdownTOC.parse(markdown).first?.title, "Bold italic deleted link a_b* & *literal* alt")
     }
 
+    func testOutlineChangesOnlyWhenHeadingsChange() {
+        let original = "# Original\n\nBody text"
+        let editedBody = "# Original\n\nUpdated body text"
+        let renamedHeading = "# Renamed\n\nBody text"
+        let insertedHeading = "# Original\n\n## New section\n\nBody text"
+
+        XCTAssertEqual(MarkdownTOC.parse(original), MarkdownTOC.parse(editedBody))
+        XCTAssertNotEqual(MarkdownTOC.parse(original), MarkdownTOC.parse(renamedHeading))
+        XCTAssertNotEqual(MarkdownTOC.parse(original), MarkdownTOC.parse(insertedHeading))
+    }
+
+    func testOutlineCanParseOffMainActor() async {
+        let titles = await Task.detached {
+            MarkdownTOC.parse("# Background\n\nBody").map(\.title)
+        }.value
+        XCTAssertEqual(titles, ["Background"])
+    }
+
+    func testHeadingSourceLinesIncludeFrontmatterAndUnsavedInsertions() {
+        let original = "# First\n\n## Second"
+        let inserted = "# First\n\n# New\n\n## Second"
+        XCTAssertEqual(flattened(MarkdownTOC.parse(original)).map(\.sourceLine), [1, 3])
+        XCTAssertEqual(flattened(MarkdownTOC.parse(inserted)).map(\.sourceLine), [1, 3, 5])
+
+        // Both empty frontmatter and blank lines inside it must be accounted for.
+        let withFrontmatter = "---\n\ntitle: Example\n---\n# First\n\nSetext\n------"
+        XCTAssertEqual(flattened(MarkdownTOC.parse(withFrontmatter)).map(\.sourceLine), [5, 7])
+    }
+
     func testOutlineIDsAndLevelsMatchRenderedArticle() throws {
         let markdown = """
         ---
