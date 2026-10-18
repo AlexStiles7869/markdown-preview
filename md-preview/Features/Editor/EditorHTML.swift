@@ -337,11 +337,13 @@ nonisolated enum EditorHTML {
         .cm-md-bullet::after {
             content: "";
             position: absolute;
-            /* Match the preview's 0.75em gap between the circle and the
-               item text. */
-            inset-inline-end: 0.75em;
-            top: 50%;
-            transform: translateY(-50%);
+            /* Place the 0.4em circle the way the preview does: from its start
+               edge, 0.75em before the item text, and centred by layout, not a
+               transform. Both edges and a transform reach the same spot but
+               round to different device pixels, so the dot seemed to shift
+               when switching modes. */
+            inset-inline-start: calc(100% - 1.15em);
+            top: calc(50% - 0.2em);
             width: 0;
             height: 0;
             border: 0.2em solid var(--link);
@@ -374,6 +376,12 @@ nonisolated enum EditorHTML {
             box-sizing: border-box;
             font-variant-numeric: tabular-nums;
         }
+        /* The preview's ::marker ends "1." one marker space before the text;
+           0.25em puts the number on the same pixels. The active source hides
+           its trailing space, so it takes the same padding and the number
+           does not move when the caret enters or leaves the line. */
+        .cm-md-ordered,
+        .cm-md-ordered-source { padding-inline-end: 0.25em; }
         .cm-md-ordered { color: var(--link); }
         .cm-md-ordered-source { color: var(--secondary); }
         /* Continuation lines of an item keep the depth padding but no hanging
@@ -530,10 +538,9 @@ nonisolated enum EditorHTML {
             /* Outer spacing comes from the block separator lines, matching
                the preview's .mermaid-figure margin. */
             position: relative;
-            margin: 0 auto;
+            margin: 0;
             width: 100%;
             --mm-max-height: min(70vh, 720px);
-            max-width: calc(var(--mm-max-height) * (var(--mm-aspect, 4 / 3)));
             aspect-ratio: var(--mm-aspect, 4 / 3);
             max-height: var(--mm-max-height);
             overflow: hidden;
@@ -541,6 +548,7 @@ nonisolated enum EditorHTML {
             background: var(--code-bg);
             cursor: text;
             box-sizing: border-box;
+            \(MarkdownHTML.diagramVariablesCSS)
         }
         .cm-md-mermaid-stage {
             position: absolute;
@@ -561,6 +569,25 @@ nonisolated enum EditorHTML {
         .cm-md-mermaid-error {
             border: 1px solid color-mix(in srgb, #d1242f 45%, transparent);
         }
+        /* No drawing gives the box no size of its own: lay the message out in
+           flow so the box spans the column and stays easy to click. */
+        .cm-md-mermaid-preview.cm-md-mermaid-message {
+            aspect-ratio: auto;
+            max-height: none;
+        }
+        .cm-md-mermaid-message .cm-md-mermaid-stage {
+            position: static;
+            display: block;
+            \(MarkdownHTML.diagramMessageCSS)
+        }
+        /* The marker line of a list item that opens with a diagram stands in
+           for the preview's figure margin under the marker. */
+        #editor .cm-content > .cm-line.cm-md-diagram-marker-line {
+            height: \(MarkdownHTML.largeBlockSpacing)px;
+        }
+        /* A diagram nested in a quote or list: the bundle sets the indent,
+           padding and one quote bar per level, as on quote and list lines. */
+        .cm-md-mermaid-nest { background-repeat: no-repeat; }
         \(MarkdownHTML.tableControlsCSS)
         .cm-md-table {
             font-family: ui-monospace, "SF Mono", Menlo, monospace;
@@ -662,23 +689,18 @@ nonisolated enum EditorHTML {
         <body>
         <div id="editor"></div>
         \(includesMermaid ? "<script>\(mermaidJavaScript)</script>" : "")
-        \(includesMermaid ? """
-        <script>
-        if (window.mermaid) {
-            window.mermaid.initialize({
-                startOnLoad: false,
-                securityLevel: "strict",
-                theme: window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default"
-            });
-        }
-        </script>
-        """ : "")
         <script>\(editorJavaScript)</script>
         <script>
         (function () {
             const post = function (m) {
                 try { window.webkit.messageHandlers.\(configuration.bridgeName).postMessage(m); } catch (e) {}
             };
+            window.__mdDiagramRenderOptions = \(MarkdownHTML.diagramRenderOptionsJS);
+            window.__mdDiagramMessages = (() => {
+                const messages = \(MarkdownHTML.diagramMessagesJS);
+                messages.forError = \(MarkdownHTML.diagramErrorMessageJS);
+                return messages;
+            })();
             window.__mdTableExpandLabel = \(jsStringLiteral(NSLocalizedString("Expand Table", comment: "Open a table in full screen")));
             window.__mdOpenTablePopup = function (markdown) { post({kind: "tablePopup", markdown}); };
             window.__mdRequestTableContextMenu = function (details) {

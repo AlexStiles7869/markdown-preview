@@ -210,6 +210,61 @@ extension EditorPreviewLayoutTests {
                            editorBoxes: ["diagram-box": ".cm-md-mermaid-preview", "diagram-svg": ".cm-md-mermaid-stage svg"]))
     }
 
+    /// Diagrams in a quote and a list, drawn and empty, keep the preview's
+    /// spacing in edit mode: the figure margin above, the quote's closing
+    /// padding below, and the container indent.
+    func testNestedMermaidDiagramsMatchTheReader() async throws {
+        try await check(Fixture(name: "mermaid-nested", markdown: """
+            Before the quote.
+
+            > Quoted intro.
+            >
+            > ```mermaid
+            > flowchart LR
+            >   Q --> R
+            > ```
+            >
+            > And an empty one.
+            >
+            > ```mermaid
+            > ```
+
+            - A list item.
+
+              ```mermaid
+              ```
+
+            After the list.
+            """, texts: ["Before the quote.", "Quoted intro.", "And an empty one.", "A list item.", "After the list."],
+                           readSelectors: [".mermaid svg": 1, ".mermaid-empty": 2],
+                           editorSelectors: [".cm-md-mermaid-stage svg": 1, ".cm-md-mermaid-message": 2],
+                           readBoxes: ["diagram-box": ".mermaid-figure:not(.mermaid-empty)", "diagram-svg": ".mermaid svg"],
+                           editorBoxes: ["diagram-box": ".cm-md-mermaid-preview:not(.cm-md-mermaid-message)",
+                                         "diagram-svg": ".cm-md-mermaid-stage svg"]))
+    }
+
+    /// A list item that opens with a diagram keeps its bullet or number in
+    /// both modes, and the diagram sits where the preview puts it.
+    func testListItemsThatOpenWithADiagramMatchTheReader() async throws {
+        try await check(Fixture(name: "mermaid-list-items", markdown: """
+            Before the lists.
+
+            - ```mermaid
+              flowchart LR
+                A --> B
+              ```
+
+            1. ```mermaid
+               flowchart LR
+                 C --> D
+               ```
+
+            After the lists.
+            """, texts: ["Before the lists.", "After the lists."],
+                           readSelectors: [".mermaid svg": 2],
+                           editorSelectors: [".cm-md-mermaid-stage svg": 2, ".cm-md-bullet": 1, ".cm-md-ordered": 1]))
+    }
+
     func testUnicodeAndRightToLeftParagraphs() async throws {
         try await check(Fixture(name: "unicode-rtl", markdown: """
             Unicode café 日本語 🧪 é.

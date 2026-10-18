@@ -65,9 +65,7 @@ nonisolated extension MarkdownHTML {
             let diagram = nsHTML.substring(with: match.range(at: 2))
             rendered += """
             <figure\(sourceAttributes) class="mermaid-figure" tabindex="0" role="img" aria-label="\(diagramLabel)">
-            <div class="mermaid-stage"><div class="mermaid">
-            \(diagram)
-            </div></div>
+            <div class="mermaid-stage"><div class="mermaid">\(diagram)</div></div>
             <div class="mermaid-hud" aria-hidden="true">
             <div class="mermaid-hud-group mermaid-hud-zoom">
             <button type="button" class="mermaid-hud-btn" data-mm-act="out" tabindex="-1" aria-label="\(zoomOut)">−</button>
@@ -87,28 +85,73 @@ nonisolated extension MarkdownHTML {
         return MermaidRenderResult(html: rendered, containsMermaid: true)
     }
 
+    /// Localized diagram messages, shared by the preview wiring and the editor
+    /// widget so both modes say the same thing. Errors come from PeleError's
+    /// code and position, since Pele's own message is English only.
+    static let diagramMessagesJS = """
+    {
+        errors: {
+            'unsupported-diagram': \(javaScriptStringLiteral(NSLocalizedString("This diagram type is not supported.", comment: "Mermaid diagram error"))),
+            syntax: \(javaScriptStringLiteral(NSLocalizedString("The diagram has a syntax error.", comment: "Mermaid diagram error"))),
+            semantic: \(javaScriptStringLiteral(NSLocalizedString("The diagram is not valid.", comment: "Mermaid diagram error"))),
+            limit: \(javaScriptStringLiteral(NSLocalizedString("The diagram is too large to draw.", comment: "Mermaid diagram error")))
+        },
+        generic: \(javaScriptStringLiteral(NSLocalizedString("The diagram could not be drawn.", comment: "Mermaid diagram error"))),
+        position: \(javaScriptStringLiteral(NSLocalizedString("Line %d, column %d", comment: "Position of a Mermaid diagram error: line, then column"))),
+        empty: \(javaScriptStringLiteral(NSLocalizedString("This diagram is empty.", comment: "Shown for a Mermaid code block with no source"))),
+        emptyHint: \(javaScriptStringLiteral(NSLocalizedString("Empty diagram. Click to add Mermaid source.", comment: "Edit-mode placeholder for a Mermaid code block with no source"))),
+        unavailable: \(javaScriptStringLiteral(NSLocalizedString("Mermaid renderer is unavailable.\n\n", comment: "Mermaid rendering error"))).trim()
+    }
+    """
+
+    /// `(err) => message` for a PeleError, reading `messages` (diagramMessagesJS)
+    /// from the enclosing scope. Translations order the numbers positionally.
+    static let diagramErrorMessageJS = """
+    (err) => {
+        const summary = (err && messages.errors[err.code]) || messages.generic;
+        if (!(err && err.line > 0)) return summary;
+        return summary + ' ' + messages.position
+            .replace(/%(1\\$)?d/, String(err.line))
+            .replace(/%(2\\$)?d/, String(err.column));
+    }
+    """
+
+    /// Marks every figure that is not drawn yet with the localized
+    /// "renderer unavailable" message above its source. Used when the bundle
+    /// is missing, and when a lazy bundle never arrives before an export.
+    /// The source is kept, so a bundle that arrives later still draws it.
+    /// Internal so SPM helper tests can drive a late load.
+    static let markUndrawnFiguresJS = """
+    document.querySelectorAll('.mermaid-figure').forEach((figure) => {
+        const node = figure.querySelector('.mermaid');
+        if (!node || node.dataset.mmDone === '1' || figure.classList.contains('mermaid-error')) return;
+        figure.classList.add('mermaid-error');
+        node.__mdSrc = node.textContent;
+        node.dataset.mmUnavailable = '1';
+        // Same layout as showError: no trailing line break under the source.
+        node.textContent = \(javaScriptStringLiteral(
+            NSLocalizedString(
+                "Mermaid renderer is unavailable.\n\n",
+                comment: "Mermaid rendering error"
+            )
+        )) + node.__mdSrc.replace(/\\s+$/, '');
+    });
+    """
+
     private static let mermaidFallbackScript = """
     <script>
     window.addEventListener('load', () => {
-        document.querySelectorAll('.mermaid').forEach((node) => {
-            node.classList.add('mermaid-error');
-            node.textContent = \(javaScriptStringLiteral(
-                NSLocalizedString(
-                    "Mermaid renderer is unavailable.\n\n",
-                    comment: "Mermaid rendering error"
-                )
-            )) + node.textContent;
-        });
+        \(markUndrawnFiguresJS)
     });
     </script>
     """
 
-    /// Mermaid wiring IIFE. Assumes the `mermaid` global has been (or will
-    /// be) defined by the time DOMContentLoaded fires — true for both inline
-    /// vendor `<script>` and `<script defer src=...>` delivery, since `defer`
-    /// scripts run before DOMContentLoaded.
-    /// Mermaid pan/zoom/HUD/popup wiring. Internal so SPM helper tests can
-    /// drive the real bootstrap path (with a stub `mermaid` + message host).
+    /// Mermaid render, pan/zoom, HUD and popup wiring. Assumes the `pele`
+    /// global has been (or will be) defined by the time DOMContentLoaded
+    /// fires — true for both inline vendor `<script>` and `<script defer
+    /// src=...>` delivery, since `defer` scripts run before DOMContentLoaded.
+    /// Internal so SPM helper tests can drive the real bootstrap path (with a
+    /// stub `pele` + message host).
     static let mermaidInitWiring = """
     (() => {
             const fillWidthLabel = \(javaScriptStringLiteral(
@@ -118,110 +161,75 @@ nonisolated extension MarkdownHTML {
                 NSLocalizedString("Fit diagram", comment: "Mermaid diagram control")
             ));
             const states = new WeakMap();
-            const queue = [];
-            let drainPromise = null;
-            let initializedTheme = null;
-            let themeOverride = null;
+            const renderOptions = \(diagramRenderOptionsJS);
+            const messages = \(diagramMessagesJS);
+            const errorMessage = \(diagramErrorMessageJS);
+            const genericError = messages.generic;
+            const emptyDiagram = messages.empty;
+            let renderCount = 0;
+            const peleColorVariables = \(diagramColorVariableNamesJS);
+            const peleStyleVariables = \(diagramStyleVariablesJS);
 
-            function selectedTheme() {
-                const nativeScheme = document.documentElement.dataset.mdpColorScheme;
-                if (nativeScheme) return nativeScheme === 'dark' ? 'dark' : 'default';
-                const dark = window.matchMedia
-                    && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                return dark ? 'dark' : 'default';
-            }
-
-            // Paper printing forces the light palette while mermaid bakes its
-            // theme into the SVG, so the host can pin a theme for the length
-            // of a print operation.
-            function activeTheme() {
-                return themeOverride || selectedTheme();
-            }
-
-            function ensureInit(theme) {
-                if (initializedTheme === theme) return;
-                initializedTheme = theme;
-                mermaid.initialize({
-                    startOnLoad: false,
-                    theme,
-                    securityLevel: 'strict',
-                    fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif'
-                });
-            }
-
-            function drain() {
-                if (drainPromise) return drainPromise;
-                drainPromise = (async () => {
-                    while (queue.length) {
-                        const figure = queue.shift();
-                        try {
-                            await renderOne(figure);
-                        } catch (err) {
-                            figure.classList.add('mermaid-error');
-                        }
-                    }
-                })().then(() => {
-                    drainPromise = null;
-                    if (queue.length) return drain();
-                    window.dispatchEvent(new Event('md-preview-mermaid-rendered'));
-                });
-                return drainPromise;
+            // pele.render is synchronous, so a batch draws in one pass and
+            // announces itself once for the host's height and scroll sync.
+            function renderFigures(figures) {
+                for (const figure of figures) renderOne(figure);
+                window.dispatchEvent(new Event('md-preview-mermaid-rendered'));
             }
 
             // Rendering is viewport-driven, so pagination (print/export) must
-            // force every remaining figure through the queue and wait for the
-            // drain to settle before the page is captured. Passing a theme
-            // pins it (and re-renders mismatched figures) until the next call
-            // without one restores the on-screen theme.
-            async function renderAll(theme) {
-                themeOverride = theme || null;
-                const want = activeTheme();
-                document.querySelectorAll('.mermaid-figure').forEach((figure) => {
-                    const node = figure.querySelector('.mermaid');
-                    if (!node || queue.includes(figure)) return;
-                    if (node.dataset.mmDone !== '1' || node.dataset.mmTheme !== want) {
-                        queue.push(figure);
-                    }
-                });
-                while (queue.length || drainPromise) {
-                    await drain();
-                }
+            // draw every remaining figure before the page is captured.
+            async function renderAll() {
+                renderFigures(document.querySelectorAll('.mermaid-figure'));
             }
 
-            async function renderOne(figure) {
-                const theme = activeTheme();
-                ensureInit(theme);
+            // A failed figure counts as done, so MdPreview.update keeps it
+            // while its source is unchanged and the message is never parsed
+            // as a diagram. The message goes above the source as text; the
+            // figure keeps line breaks, so a trailing one would show as a
+            // blank line, and an empty block shows the message alone.
+            function showError(figure, node, message) {
+                const source = node.__mdSrc.replace(/\\s+$/, '');
+                node.textContent = source ? message + '\\n\\n' + source : message;
+                node.dataset.mmDone = '1';
+                figure.classList.add('mermaid-error');
+            }
+
+            function renderOne(figure) {
                 const node = figure.querySelector('.mermaid');
-                if (!node) return;
-                if (node.dataset.mmDone === '1') {
-                    if (node.dataset.mmTheme === theme) return;
-                    if (typeof node.__mdSrc !== 'string') return;
-                    // Theme change: put the stashed source back and clear any
-                    // pan/zoom transform now, so a pagination that starts
-                    // before the next frame never captures a stale state.
-                    const prior = states.get(figure);
-                    if (prior && prior.surface) prior.surface.style.transform = '';
+                if (!node || node.dataset.mmDone === '1') return;
+                if (node.dataset.mmUnavailable === '1') {
+                    // The bundle arrived after an export gave up on it: put
+                    // the source back before drawing it.
+                    delete node.dataset.mmUnavailable;
                     node.textContent = node.__mdSrc;
-                    node.removeAttribute('data-processed');
-                    delete node.dataset.mmDone;
-                } else {
-                    // Pre-render source, stashed so MdPreview.update can pair
-                    // unchanged diagrams with their SVGs during DOM diffs.
-                    node.__mdSrc = node.textContent;
+                    figure.classList.remove('mermaid-error');
                 }
-                try {
-                    await mermaid.run({ nodes: [node], suppressErrors: true });
-                } catch (err) {
-                    figure.classList.add('mermaid-error');
+                // Pre-render source, stashed so MdPreview.update can pair
+                // unchanged diagrams with their SVGs during DOM diffs. A
+                // morph with new source clears the done flag and lands here.
+                node.__mdSrc = node.textContent;
+                if (!node.__mdSrc.trim()) {
+                    showError(figure, node, emptyDiagram);
+                    figure.classList.add('mermaid-empty');
                     return;
                 }
-                const svg = node.querySelector('svg');
+                let svg;
+                try {
+                    // A unique prefix keeps each diagram's accessible title and
+                    // description IDs apart.
+                    const options = Object.assign({ idPrefix: 'mdp-diagram-' + (++renderCount) + '-' }, renderOptions);
+                    node.innerHTML = pele.render(node.__mdSrc, options).svg;
+                    svg = node.querySelector('svg');
+                } catch (err) {
+                    showError(figure, node, errorMessage(err));
+                    return;
+                }
                 if (!svg) {
-                    figure.classList.add('mermaid-error');
+                    showError(figure, node, genericError);
                     return;
                 }
                 node.dataset.mmDone = '1';
-                node.dataset.mmTheme = theme;
                 attachZoom(figure, svg);
             }
 
@@ -252,16 +260,18 @@ nonisolated extension MarkdownHTML {
 
                 const alreadyWired = states.has(figure);
                 const state = {
-                    tx: 0, ty: 0, scale: 1, min: 1, max: 8,
+                    tx: 0, ty: 0, scale: 1, min: 0.25, max: 8,
                     rect: null, raf: 0, dragging: false,
                     lastX: 0, lastY: 0, surface,
                     vbW, vbH, svg
                 };
                 states.set(figure, state);
-                cacheRect(figure);
 
-                // A theme re-render reuses the figure and its listeners; only
-                // the state and HUD need resetting for the fresh SVG.
+                // A figure redrawn after MdPreview.update morphed in new
+                // source keeps its listeners; only the state and HUD need
+                // resetting for the fresh SVG. Its rect is measured on first
+                // use (or by the ResizeObserver), not here, so a batch of
+                // figures does not force a layout per diagram.
                 if (alreadyWired) {
                     apply(figure, state);
                     return;
@@ -278,7 +288,21 @@ nonisolated extension MarkdownHTML {
 
             function cacheRect(figure) {
                 const s = states.get(figure);
-                if (s) s.rect = figure.getBoundingClientRect();
+                if (!s) return;
+                const previous = s.rect;
+                s.rect = figure.getBoundingClientRect();
+                // Zoomed out, the offsets hold the centring for the old box
+                // size: move them by the change of that centre, so a centred
+                // drawing stays centred and a deliberate pan is kept.
+                if (previous && s.scale < 1) {
+                    const dx = (s.rect.width - previous.width) * (1 - s.scale) / 2;
+                    const dy = (s.rect.height - previous.height) * (1 - s.scale) / 2;
+                    if (dx || dy) {
+                        s.tx += dx;
+                        s.ty += dy;
+                        apply(figure, s);
+                    }
+                }
             }
 
             function postMermaidHover(value) {
@@ -313,7 +337,20 @@ nonisolated extension MarkdownHTML {
                 if (!s || !s.svg) return;
                 const svg = s.svg;
                 const clone = svg.cloneNode(true);
-                clone.removeAttribute('style');
+                // Keep the style attribute: it wires Pele's --pele-* inputs
+                // into the drawing. The popup has none of this page's CSS,
+                // so carry the theme colours along, resolved to plain values
+                // (the tokens are system colours and color-mix() here).
+                const probe = document.createElement('span');
+                figure.appendChild(probe);
+                for (const name of peleColorVariables) {
+                    probe.style.color = 'var(' + name + ')';
+                    clone.style.setProperty(name, getComputedStyle(probe).color);
+                }
+                probe.remove();
+                for (const [name, value] of Object.entries(peleStyleVariables)) {
+                    clone.style.setProperty(name, value);
+                }
                 clone.setAttribute('preserveAspectRatio', 'xMidYMid meet');
                 clone.removeAttribute('width');
                 clone.removeAttribute('height');
@@ -347,7 +384,13 @@ nonisolated extension MarkdownHTML {
                 s.tx = x - (x - s.tx) * ratio;
                 s.ty = y - (y - s.ty) * ratio;
                 s.scale = next;
-                if (s.scale <= 1.001) { s.tx = 0; s.ty = 0; }
+                if (s.scale <= 1.001) {
+                    // At or below 100% the whole drawing fits: keep it centred
+                    // in its box (the transform origin is the top-left corner).
+                    if (!s.rect) cacheRect(figure);
+                    s.tx = s.rect.width * (1 - s.scale) / 2;
+                    s.ty = s.rect.height * (1 - s.scale) / 2;
+                }
                 apply(figure, s);
             }
 
@@ -438,7 +481,7 @@ nonisolated extension MarkdownHTML {
                 if (e.target.closest('.mermaid-hud')) return;
                 const s = states.get(figure);
                 if (!s) return;
-                if (s.scale > 1.001) {
+                if (Math.abs(s.scale - 1) > 0.001) {
                     reset(figure);
                 } else {
                     if (!s.rect) cacheRect(figure);
@@ -471,14 +514,13 @@ nonisolated extension MarkdownHTML {
                 const figures = document.querySelectorAll('.mermaid-figure');
                 if (!figures.length) return;
                 const io = new IntersectionObserver((entries) => {
-                    for (const entry of entries) {
-                        if (entry.isIntersecting) {
-                            io.unobserve(entry.target);
-                            queue.push(entry.target);
-                            ro.observe(entry.target);
-                            drain();
-                        }
+                    const visible = entries.filter((entry) => entry.isIntersecting).map((entry) => entry.target);
+                    if (!visible.length) return;
+                    for (const figure of visible) {
+                        io.unobserve(figure);
+                        ro.observe(figure);
                     }
+                    renderFigures(visible);
                 }, { rootMargin: '300px 0px' });
                 figures.forEach((f) => io.observe(f));
             }
@@ -486,23 +528,17 @@ nonisolated extension MarkdownHTML {
             window.MdPreview = window.MdPreview || {};
             window.MdPreview.mermaidRenderAll = renderAll;
 
-            return { bootstrap };
+            return { bootstrap, renderAll };
         })()
     """
 
-    static var paperMermaidScript: String {
-        let vendor = bundledVendorResource("mermaid.min", ext: "js", subdir: "Vendor/Mermaid") ?? ""
-        return vendor + "\n" + mermaidInitWiring
-            + ";\nvoid 0;"
-    }
-
     static func mermaidScript(mode: VendorLoading) -> VendorEmission {
-        guard bundledVendorURL("mermaid.min", ext: "js", subdir: "Vendor/Mermaid") != nil else {
+        guard bundledVendorURL("pele.global", ext: "js", subdir: "Vendor/Pele") != nil else {
             return VendorEmission(head: mermaidFallbackScript)
         }
         switch mode {
         case .inline:
-            let vendorJS = bundledVendorResource("mermaid.min", ext: "js", subdir: "Vendor/Mermaid") ?? ""
+            let vendorJS = bundledVendorResource("pele.global", ext: "js", subdir: "Vendor/Pele") ?? ""
             let safeVendor = vendorJS.replacingOccurrences(of: "</script", with: "<\\/script")
             return VendorEmission(
                 body: """
@@ -526,11 +562,28 @@ nonisolated extension MarkdownHTML {
             <script>
             (() => {
                 let mm = null;
+                let markLoaded;
+                const loaded = new Promise((resolve) => { markLoaded = resolve; });
+                // Print or export can start before the bundle arrives. Until
+                // the wiring replaces it, this waits for the bundle (a few
+                // seconds at most) so the capture holds drawn diagrams. If it
+                // never arrives, the figures say so, as with a missing
+                // bundle, instead of exporting bare source as if it were
+                // drawn; the rest of the document still exports.
+                let waitLimit = null;
+                window.MdPreview = window.MdPreview || {};
+                window.MdPreview.mermaidRenderAll = async () => {
+                    waitLimit = waitLimit || new Promise((resolve) => setTimeout(resolve, 5000));
+                    await Promise.race([loaded, waitLimit]);
+                    if (mm) return mm.renderAll();
+                    \(markUndrawnFiguresJS)
+                };
                 window.MdPreviewLazy.lazyRenderer({
-                    src: '\(MarkdownAssetScheme.vendorURL("mermaid.min.js"))',
+                    src: '\(MarkdownAssetScheme.vendorURL("pele.global.js"))',
                     run: () => {
                         mm = mm || \(mermaidInitWiring);
                         mm.bootstrap();
+                        markLoaded();
                     },
                 });
             })();

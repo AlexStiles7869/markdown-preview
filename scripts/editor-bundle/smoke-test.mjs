@@ -900,7 +900,87 @@ check("active Mermaid block reveals editable source",
   mermaidHost.querySelector(".cm-md-mermaid-preview") == null)
 check("active Mermaid block preserves source",
   mermaidEditor.getMarkdown().includes("flowchart LR\n  A --> B"))
+mermaidEditor.select(0, mermaidEditor.getMarkdown().length)
+check("select all keeps the open Mermaid source open",
+  mermaidHost.querySelector(".cm-md-mermaid-preview") == null)
+mermaidEditor.select(0, 3)
+check("a range selection outside the open block closes it",
+  mermaidHost.querySelector(".cm-md-mermaid-preview") != null)
 mermaidEditor.destroy()
+
+// Clicking a diagram opens its source with the caret at the end of its last
+// source line (an empty block gets one); typing must edit the diagram, not a
+// ``` marker, and leave the other diagram drawn.
+async function clickFirstDiagramAndType(markdown, text) {
+  const host = dom.window.document.createElement("div")
+  dom.window.document.body.appendChild(host)
+  const editor = dom.window.MDEditor.create(host, markdown, {})
+  host.querySelector(".cm-md-mermaid-preview")
+    .dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }))
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("mouseup", { bubbles: true, button: 0 }))
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  editor.insert(text)
+  const result = {
+    markdown: editor.getMarkdown(),
+    previews: host.querySelectorAll(".cm-md-mermaid-preview").length,
+  }
+  editor.destroy()
+  return result
+}
+const clickedDiagram = await clickFirstDiagramAndType(
+  "intro\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\nafter\n\n```mermaid\npie\n```", "x")
+check("typing after clicking a diagram keeps its fence intact",
+  clickedDiagram.markdown === "intro\n\n```mermaid\nflowchart LR\n  A --> Bx\n```\n\nafter\n\n```mermaid\npie\n```")
+check("typing after clicking a diagram keeps the other diagram drawn", clickedDiagram.previews === 1)
+const clickedEmpty = await clickFirstDiagramAndType(
+  "intro\n\n```mermaid\n```\n\nafter\n\n```mermaid\nflowchart LR\n  A --> B\n```", "g")
+check("one click on an empty diagram block leaves the caret inside it",
+  clickedEmpty.markdown === "intro\n\n```mermaid\ng\n```\n\nafter\n\n```mermaid\nflowchart LR\n  A --> B\n```")
+check("typing into an empty diagram block keeps the next diagram drawn", clickedEmpty.previews === 1)
+const clickedQuoted = await clickFirstDiagramAndType("intro\n\n> ```mermaid\n> ```\n\nafter", "g")
+check("an empty diagram in a quote gets a quoted source line",
+  clickedQuoted.markdown === "intro\n\n> ```mermaid\n> g\n> ```\n\nafter")
+{
+  // Quote bars and indent are drawn by the widget, with no code card around
+  // it: the card would draw a second box.
+  const host = dom.window.document.createElement("div")
+  dom.window.document.body.appendChild(host)
+  const editor = dom.window.MDEditor.create(host, "> quote\n>\n> ```mermaid\n> ```\n\nafter", {})
+  const nest = host.querySelector(".cm-md-mermaid-nest")
+  check("a diagram in a quote is nested with its quote bar",
+    nest != null && nest.querySelector(".cm-md-mermaid-preview") != null
+    && nest.style.backgroundImage.includes("--quote-border"))
+  check("a diagram widget is not wrapped in a code card",
+    host.querySelector(".cm-md-code-card .cm-md-mermaid-preview") == null)
+  editor.destroy()
+}
+{
+  // A diagram under item "100." takes the list's extra digit width, like the
+  // item's own continuation lines.
+  const host = dom.window.document.createElement("div")
+  dom.window.document.body.appendChild(host)
+  const editor = dom.window.MDEditor.create(host, "100. item\n\n     ```mermaid\n     ```\n", {})
+  const nest = host.querySelector(".cm-md-mermaid-nest")
+  check("a diagram in a wide ordered list keeps the extra digit indent",
+    nest != null && /1ch/.test(nest.style.paddingInlineStart))
+  editor.destroy()
+}
+for (const [markdown, marker] of [
+  ["- ```mermaid\n  flowchart LR\n    A --> B\n  ```\n\nafter", ".cm-md-bullet"],
+  ["1. ```mermaid\n   flowchart LR\n     A --> B\n   ```\n\nafter", ".cm-md-ordered"],
+]) {
+  // A fence that starts on the list marker's line keeps the marker drawn.
+  const host = dom.window.document.createElement("div")
+  dom.window.document.body.appendChild(host)
+  const editor = dom.window.MDEditor.create(host, markdown, {})
+  check(`a diagram on a list marker's line keeps the marker (${marker})`,
+    host.querySelector(marker) != null && host.querySelector(".cm-md-mermaid-preview") != null
+    && host.querySelector(".cm-md-code-card .cm-md-mermaid-preview") == null)
+  editor.destroy()
+}
+const clickedListed = await clickFirstDiagramAndType("intro\n\n- item\n\n  ```mermaid\n  ```\n\nafter", "g")
+check("an empty diagram in a list keeps the list indent",
+  clickedListed.markdown === "intro\n\n- item\n\n  ```mermaid\n  g\n  ```\n\nafter")
 
 const authoredMermaidHost = dom.window.document.createElement("div")
 dom.window.document.body.appendChild(authoredMermaidHost)

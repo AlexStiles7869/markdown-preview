@@ -28,8 +28,8 @@ nonisolated final class MarkdownAssetScheme: NSObject, WKURLSchemeHandler {
     /// Vendor-file byte cache. Populated lazily by `serve(...)` on first
     /// request — vendor bundles never change for the lifetime of the app
     /// process, and WKWebView's NSURLCache doesn't cover custom-scheme
-    /// responses, so without this cache every `<script src>` re-reads the
-    /// 3 MB Mermaid blob from disk.
+    /// responses, so without this cache every `<script src>` re-reads its
+    /// bundle (KaTeX, Pele, highlight.js) from disk.
     private nonisolated static let vendorDataCache = VendorDataCache()
 
     private let queue = DispatchQueue(label: "doc.md-preview.asset-scheme", qos: .userInitiated)
@@ -59,7 +59,7 @@ nonisolated final class MarkdownAssetScheme: NSObject, WKURLSchemeHandler {
         let mapping: [String: (name: String, ext: String, subdir: String)] = [
             "katex.min.js":     ("katex.min",     "js",  "Vendor/KaTeX"),
             "copy-tex.min.js":  ("copy-tex.min",  "js",  "Vendor/KaTeX"),
-            "mermaid.min.js":   ("mermaid.min",   "js",  "Vendor/Mermaid"),
+            "pele.global.js":   ("pele.global",   "js",  "Vendor/Pele"),
             "highlight.min.js": ("highlight.min", "js",  "Vendor/Highlight"),
             "purify.min.js":    ("purify.min",    "js",  "Vendor/DOMPurify"),
         ]

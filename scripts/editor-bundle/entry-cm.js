@@ -264,10 +264,42 @@ class RuleWidget extends WidgetType {
 let mermaidWidgetID = 0
 
 class MermaidWidget extends WidgetType {
-  constructor(source) { super(); this.source = source }
-  eq(other) { return other.source === this.source }
+  // The widget replaces whole lines, so the line styles of the quotes and
+  // lists around the fence (bars, indent) no longer reach it. `nest`
+  // ({ quoteDepth, quoteEnds, listDepth, listExtra }, or null) lets it draw
+  // the same geometry; `quoteEnds` counts the quotes whose closing padding
+  // falls under this, their last block.
+  constructor(source, nest = null) {
+    super()
+    this.source = source
+    this.nest = nest
+    this.nestKey = nest ? `${nest.quoteDepth}:${nest.quoteEnds}:${nest.listDepth}:${nest.listExtra}` : ""
+  }
+  eq(other) { return other.source === this.source && other.nestKey === this.nestKey }
 
   toDOM(view) {
+    const figure = this.figure(view)
+    const nest = this.nest
+    if (!nest) return figure
+    const wrapper = document.createElement("div")
+    wrapper.className = "cm-md-mermaid-nest"
+    const quote = quoteGeometry(nest.quoteDepth, "0")
+    wrapper.style.paddingInlineStart = `calc(${quote.padding} + ${listTextIndent(nest.listDepth, nest.listExtra)})`
+    if (nest.quoteDepth) {
+      // Quote lines keep 1em clear at the end; the bars stop above the
+      // closing padding, as on a quote's last line.
+      const bottom = `${nest.quoteEnds * 0.4}em`
+      wrapper.style.paddingInlineEnd = "1em"
+      wrapper.style.paddingBottom = bottom
+      wrapper.style.backgroundImage = quote.images
+      wrapper.style.backgroundPosition = quote.positions
+      wrapper.style.backgroundSize = `4px calc(100% - ${bottom})`
+    }
+    wrapper.appendChild(figure)
+    return wrapper
+  }
+
+  figure(view) {
     const figure = document.createElement("figure")
     figure.className = "cm-md-mermaid-preview"
     figure.setAttribute("role", "img")
@@ -281,40 +313,77 @@ class MermaidWidget extends WidgetType {
     figure.addEventListener("mousedown", (event) => {
       event.preventDefault()
       view.focus()
-      const widgetPosition = view.posAtDOM(figure)
+      // Take the block from the widget's own range (its DOM position can be
+      // any of its lines) and land at the end of the last source line, never
+      // inside a ``` marker, where a typed character would break the fence.
+      // An empty block gets one source line, so the first click is enough.
+      const { state } = view
+      const position = view.posAtDOM(figure)
+      // The range starts at the line start, which a quote or list marker
+      // owns, so find the fence from the range's end.
+      let to = null
+      state.field(mermaidPreviews).between(position, position, (_start, end) => { to = end; return false })
+      const node = to == null ? null : fencedCodeNode(state, to, -1)
+      if (!node) return
+      const { sourceFrom, sourceTo, closed } = fencedCodeDetails(state, node)
+      const empty = sourceTo <= sourceFrom
+      const openingLine = state.doc.lineAt(node.from)
+      // Inside a quote or list the new line needs the container's prefix,
+      // or the typed text falls outside the fence: copy it from the closing
+      // marker's line, or from the opening line with list markers blanked.
+      const blankedMarker = ({ prefix, indent }) => indent + " ".repeat(prefix.length - indent.length)
+      const prefix = !empty ? ""
+        : closed ? state.sliceDoc(state.doc.lineAt(sourceTo).from, node.lastChild.from)
+        : blankedMarker(listPrefix(state.sliceDoc(openingLine.from, node.from)))
       view.dispatch({
-        selection: { anchor: widgetPosition + 1 },
+        changes: empty ? { from: openingLine.to, insert: "\n" + prefix } : undefined,
+        selection: { anchor: empty ? openingLine.to + 1 + prefix.length : closed ? sourceTo - 1 : sourceTo },
         userEvent: "select.pointer",
       })
     })
 
-    const mermaid = window.mermaid
-    if (!mermaid || typeof mermaid.render !== "function") {
-      stage.textContent = "Mermaid preview unavailable. Click to edit source."
+    // A widget that shows text instead of a drawing has no size of its own;
+    // the message class lays the text out in flow.
+    const showMessage = (text, isError) => {
+      stage.textContent = text
+      figure.classList.add("cm-md-mermaid-message")
+      if (isError) figure.classList.add("cm-md-mermaid-error")
       return figure
     }
+    // Localized by the host (MarkdownHTML.diagramMessagesJS), the same text
+    // as the preview's; English stands in when the host has none.
+    const messages = window.__mdDiagramMessages
+    if (!this.source.trim()) {
+      return showMessage(messages?.emptyHint ?? "Empty diagram. Click to add Mermaid source.", false)
+    }
 
-    const id = `md-editor-mermaid-${++mermaidWidgetID}`
-    Promise.resolve(mermaid.render(id, this.source))
-      .then(({ svg }) => {
-        stage.innerHTML = svg
-        const diagram = stage.querySelector("svg")
-        const box = diagram?.viewBox?.baseVal
-        if (diagram && box?.width > 0 && box?.height > 0) {
-          figure.style.setProperty("--mm-aspect", `${box.width} / ${box.height}`)
-          diagram.removeAttribute("width")
-          diagram.removeAttribute("height")
-          diagram.setAttribute("preserveAspectRatio", "xMidYMid meet")
-          diagram.style.width = "100%"
-          diagram.style.height = "100%"
-        }
-        view.requestMeasure()
+    const pele = window.pele
+    if (!pele || typeof pele.render !== "function") {
+      return showMessage(messages?.unavailable ?? "Mermaid renderer is unavailable.", false)
+    }
+
+    // Pele renders synchronously, so the widget is complete when CodeMirror
+    // first measures it. Its SVG takes colours from the --pele-* variables
+    // on the figure; the host passes the preview's render options.
+    try {
+      const { svg } = pele.render(this.source, {
+        ...window.__mdDiagramRenderOptions,
+        idPrefix: `md-editor-mermaid-${++mermaidWidgetID}-`,
       })
-      .catch(() => {
-        stage.textContent = "Unable to render Mermaid diagram. Click to edit source."
-        figure.classList.add("cm-md-mermaid-error")
-        view.requestMeasure()
-      })
+      stage.innerHTML = svg
+      const diagram = stage.querySelector("svg")
+      const box = diagram?.viewBox?.baseVal
+      if (diagram && box?.width > 0 && box?.height > 0) {
+        figure.style.setProperty("--mm-aspect", `${box.width} / ${box.height}`)
+        diagram.removeAttribute("width")
+        diagram.removeAttribute("height")
+        diagram.setAttribute("preserveAspectRatio", "xMidYMid meet")
+        diagram.style.width = "100%"
+        diagram.style.height = "100%"
+      }
+    } catch (err) {
+      return showMessage(messages?.forError(err) ?? "The diagram could not be drawn.", true)
+    }
     return figure
   }
 
@@ -1490,23 +1559,28 @@ const blockGapLine = (height) => {
 // resolved per line after the tree walk, so a line inside two blockquotes
 // gets one decoration at depth 2 rather than two competing ones.
 const quoteLineCache = new Map()
+// Quote padding and one 4px bar per level, shared by quote lines and by
+// diagram widgets nested in quotes (`top` is where the bars start).
+const quoteGeometry = (depth, top) => {
+  const levels = Array.from({ length: depth }, (_, level) => level)
+  return {
+    padding: `${depth * 1.5}em`,
+    images: levels.map(() => "linear-gradient(var(--quote-border), var(--quote-border))").join(","),
+    positions: levels.map((level) => `calc(0.3em + ${level * 1.5}em) ${top}`).join(","),
+  }
+}
 const quoteLine = (depth, starts, ends, gap) => {
   const key = `${depth}:${starts}:${ends}:${gap}`
   let deco = quoteLineCache.get(key)
   if (!deco) {
-    const positions = []
-    const images = []
-    for (let level = 0; level < depth; level++) {
-      positions.push(`calc(0.3em + ${level * 1.5}em) var(--cm-md-quote-top)`)
-      images.push("linear-gradient(var(--quote-border), var(--quote-border))")
-    }
+    const quote = quoteGeometry(depth, "var(--cm-md-quote-top)")
     deco = Decoration.line({
       class: "cm-md-quote",
       attributes: {
-        style: `padding-inline-start:${depth * 1.5}em;`
+        style: `padding-inline-start:${quote.padding};`
           + `--cm-md-quote-top:calc(${starts * 0.4}em + ${gap}px);--cm-md-quote-bottom:${ends * 0.4}em;`
-          + `background-image:${images.join(",")};`
-          + `background-position:${positions.join(",")};`,
+          + `background-image:${quote.images};`
+          + `background-position:${quote.positions};`,
       },
     })
     quoteLineCache.set(key, deco)
@@ -1524,6 +1598,10 @@ const codeLine = Decoration.line({ class: "cm-md-codeblock" })
 const codeLineFirst = Decoration.line({ class: "cm-md-codeblock cm-md-codeblock-first" })
 const codeLineLast = Decoration.line({ class: "cm-md-codeblock cm-md-codeblock-last" })
 const codeScrollText = Decoration.mark({ class: "cm-md-code-scroll-text" })
+// The list marker's line above a diagram that opens its item: as tall as the
+// preview's figure margin, which is what separates the marker from the
+// diagram there.
+const diagramMarkerLine = Decoration.line({ class: "cm-md-diagram-marker-line" })
 
 // One native scrollport per code block keeps momentum, text, and selection
 // together without mirroring horizontal offsets between editable lines.
@@ -1557,15 +1635,18 @@ const listItemLine = Decoration.line({ class: "cm-md-list-item" })
 // such digit widens that level's step by 1ch, and the innermost level's step
 // is the hanging box of this line's marker.
 const listDepthLineCache = new Map()
+// The list's text column, shared by list lines and by diagram widgets nested
+// in lists: one marker box per level plus 1ch per extra ordered digit.
+const listTextIndent = (depth, extraTotal) => extraTotal > 0
+  ? `calc(${depth * MARKER_BOX_EM}em + ${extraTotal}ch)`
+  : `${depth * MARKER_BOX_EM}em`
 const listDepthLine = (depth, extraDigits = []) => {
   const extraTotal = extraDigits.reduce((sum, extra) => sum + extra, 0)
   const extraHanging = extraDigits[extraDigits.length - 1] ?? 0
   const key = `${depth}:${extraTotal}:${extraHanging}`
   let deco = listDepthLineCache.get(key)
   if (!deco) {
-    const padding = extraTotal > 0
-      ? `calc(${depth * MARKER_BOX_EM}em + ${extraTotal}ch)`
-      : `${depth * MARKER_BOX_EM}em`
+    const padding = listTextIndent(depth, extraTotal)
     const indent = extraHanging > 0
       ? `calc(-${MARKER_BOX_EM}em - ${extraHanging}ch)`
       : `-${MARKER_BOX_EM}em`
@@ -1653,25 +1734,49 @@ function fencedCodeDetails(state, node) {
     infoFrom,
     infoTo,
     sourceFrom,
+    sourceTo,
+    closed: codeMarks.length > 1,
     source,
   }
 }
 
-function fencedCodeAt(state, pos) {
+// The info string alone decides a diagram: language detection never yields
+// "mermaid", so this skips fencedCodeDetails' source work on hot paths.
+function isMermaidFence(state, node) {
+  const info = node.node.getChild("CodeInfo")
+  return !!info && state.sliceDoc(info.from, info.to).trim().split(/\s+/, 1)[0].toLowerCase() === "mermaid"
+}
+
+function fencedCodeNode(state, pos, side) {
   // Stay in the outer Markdown tree—the innermost mounted language tree does
   // not retain FencedCode as one of its parents.
-  let node = syntaxTree(state).resolve(pos, -1)
-  while (node) {
-    if (node.name === "FencedCode") {
-      return {
-        from: node.from,
-        to: node.to,
-        closed: node.node.lastChild?.name === "CodeMark",
-      }
-    }
-    node = node.parent
+  for (let node = syntaxTree(state).resolve(pos, side); node; node = node.parent) {
+    if (node.name === "FencedCode") return node
   }
   return null
+}
+
+// Where the diagram widget replacing the fence at `fenceFrom` starts (the
+// line start, or the fence after a list marker), or -1. Such a fence keeps
+// its code-line decorations (they carry the spacing that matches the preview)
+// but gets no code card or language label: the card would wrap the widget
+// and draw a second box around it.
+function diagramWidgetStart(state, lineFrom, fenceFrom) {
+  let found = -1
+  state.field(mermaidPreviews, false)?.between(lineFrom, fenceFrom, (start) => {
+    if (start >= lineFrom && start <= fenceFrom) found = start
+    return found < 0
+  })
+  return found
+}
+
+function fencedCodeAt(state, pos) {
+  const node = fencedCodeNode(state, pos, -1)
+  return node && {
+    from: node.from,
+    to: node.to,
+    closed: node.node.lastChild?.name === "CodeMark",
+  }
 }
 
 // Snapshot only the state that controls source visibility during a gesture.
@@ -1774,7 +1879,13 @@ const activeCodeBlock = StateField.define({
     }
 
     const selection = tr.state.selection.main
-    if (!selection.empty) return null
+    // A range selection is an operation on rendered content, so it never
+    // opens a block. One that still overlaps the open block (select all, or
+    // a drag through its source) keeps that block open instead of closing it
+    // under the user.
+    if (!selection.empty) {
+      return value && selection.from <= value.to && selection.to >= value.from ? value : null
+    }
 
     const head = selection.head
     if (tr.isUserEvent("select.pointer")) return fencedCodeAt(tr.state, head)
@@ -1803,10 +1914,28 @@ function buildMermaidPreviews(state) {
       const isActive = activeFence != null
         && node.from <= activeFence.from && node.to >= activeFence.to
       if (details.language === "mermaid" && !isActive && !currentFindTouches(state, node.from, node.to)) {
+        // Replace whole lines: inside a quote or list the fence starts after
+        // the marker or indent, and what the replace left of that line would
+        // still draw as an empty code card above the diagram. A list marker on
+        // the fence's line stays, so its bullet or number is still drawn.
+        const opening = state.doc.lineAt(node.from)
+        const keepsMarker = listPrefix(state.sliceDoc(opening.from, node.from)).style !== "none"
+        const nest = { quoteDepth: 0, quoteEnds: 0, listDepth: 0, listExtra: 0 }
+        const lastLine = state.doc.lineAt(node.to).number
+        for (let parent = node.node.parent; parent; parent = parent.parent) {
+          if (parent.name === "Blockquote") {
+            nest.quoteDepth++
+            if (state.doc.lineAt(parent.to).number === lastLine) nest.quoteEnds++
+          }
+          if (parent.name === "ListItem") {
+            nest.listDepth++
+            if (parent.parent?.name === "OrderedList") nest.listExtra += orderedListExtraDigits(parent.parent, tree)
+          }
+        }
         ranges.push(Decoration.replace({
           block: true,
-          widget: new MermaidWidget(details.source),
-        }).range(node.from, node.to))
+          widget: new MermaidWidget(details.source, nest.quoteDepth || nest.listDepth ? nest : null),
+        }).range(keepsMarker ? node.from : opening.from, node.to))
         return false
       }
     },
@@ -2003,8 +2132,7 @@ function buildDecorations(view, detectedCodeCache) {
       case "HorizontalRule": return METRICS.hr
       case "FencedCode":
         // Mermaid fences render as .mermaid-figure (same margin as tables).
-        return fencedCodeDetails(state, node).language === "mermaid"
-          ? METRICS.table : METRICS.paragraph
+        return isMermaidFence(state, node) ? METRICS.table : METRICS.paragraph
       default: return METRICS.paragraph
     }
   }
@@ -2163,14 +2291,16 @@ function buildDecorations(view, detectedCodeCache) {
           return
         }
 
-        // Container paragraphs use their own semantic margin. Their blank
-        // source lines are not top-level authored spacers in the preview.
-        if (name === "Paragraph" && /^(Blockquote|ListItem)$/.test(node.node.parent?.name || "")) {
+        // Container paragraphs and diagrams use their own semantic margin.
+        // Their blank source lines are not top-level authored spacers in the
+        // preview, where a diagram keeps its larger figure margin.
+        if ((name === "Paragraph" || (name === "FencedCode" && isMermaidFence(state, node)))
+            && /^(Blockquote|ListItem)$/.test(node.node.parent?.name || "")) {
           const first = state.doc.lineAt(node.from)
           if (first.number > state.doc.lineAt(node.node.parent.from).number) {
             const previous = state.doc.line(first.number - 1)
             if (/^(?:[ >]*)$/.test(previous.text)) {
-              lineOnce(previous.from, blockSeparatorLine(METRICS.paragraph))
+              lineOnce(previous.from, blockSeparatorLine(blockMarginTop(node)))
             }
           }
         }
@@ -2451,7 +2581,13 @@ function buildDecorations(view, detectedCodeCache) {
             : hidesClosingFence
               ? state.doc.line(last.number - 1)
               : last
-          if (name === "FencedCode") {
+          // No language label or highlighting under a diagram widget.
+          const diagramFrom = name === "FencedCode" ? diagramWidgetStart(state, first.from, node.from) : -1
+          const diagram = diagramFrom >= 0
+          // A diagram that keeps a list marker on its first line leaves that
+          // line to the list, so the marker is not collapsed with the fence.
+          const markerLine = diagram && diagramFrom > first.from
+          if (name === "FencedCode" && !diagram) {
             const details = fencedCodeDetails(state, node)
             if (details.detectedLanguage) {
               for (const token of detectedCodeHighlights(details, detectedCodeCache)) {
@@ -2473,7 +2609,7 @@ function buildDecorations(view, detectedCodeCache) {
               }),
               side: -1,
             }).range(widgetLine.from))
-          } else {
+          } else if (name === "CodeBlock") {
             ranges.push(Decoration.widget({
               widget: new CodeLanguageWidget({ fenceFrom: first.from, language: 'text',
                 rawInfo: '', plain: true, wrapped: state.field(wrappedCodeBlocks).has(first.from) }),
@@ -2483,6 +2619,12 @@ function buildDecorations(view, detectedCodeCache) {
           let pos = node.from
           while (pos <= node.to) {
             const line = state.doc.lineAt(pos)
+            if (markerLine && line.from === first.from) {
+              lineOnce(line.from, diagramMarkerLine)
+              if (line.to >= node.to) break
+              pos = line.to + 1
+              continue
+            }
             const rawIndentedList = name === "CodeBlock"
               && decoratedLines.has(`${listItemLine.spec.class}@${line.from}`)
               ? line.text.match(markdownListMarker)
@@ -2508,10 +2650,12 @@ function buildDecorations(view, detectedCodeCache) {
               if (isFirst) lineOnce(line.from, codeLineFirst)
               if (isLast) lineOnce(line.from, codeLineLast)
               if (!isFirst && !isLast) lineOnce(line.from, codeLine)
-              ranges.push(Decoration.line({ attributes: {
-                'data-code-scroll-group': String(first.from),
-                class: state.field(wrappedCodeBlocks).has(first.from) ? 'cm-md-code-wrapped' : '',
-              } }).range(line.from))
+              if (!diagram) {
+                ranges.push(Decoration.line({ attributes: {
+                  'data-code-scroll-group': String(first.from),
+                  class: state.field(wrappedCodeBlocks).has(first.from) ? 'cm-md-code-wrapped' : '',
+                } }).range(line.from))
+              }
               if (line.length) ranges.push(codeScrollText.range(line.from, line.to))
             }
             if (name === "CodeBlock" && !touchesLineOf(line.from)) {
