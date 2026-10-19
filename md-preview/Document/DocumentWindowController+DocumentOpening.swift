@@ -165,7 +165,7 @@ extension DocumentWindowController {
     }
 
     func loadFile(at url: URL, silentOnFailure: Bool = false) {
-        scheduleFileLoadIndicator(for: url)
+        let indicatorRequestID = scheduleFileLoadIndicator(for: url)
         Task { @concurrent [weak self] in
             do {
                 let text = try String(contentsOf: url, encoding: .utf8)
@@ -177,6 +177,7 @@ extension DocumentWindowController {
                 let nsError = error as NSError
                 await self?.applyLoadFailure(error: nsError,
                                              fileURL: url,
+                                             indicatorRequestID: indicatorRequestID,
                                              silentOnFailure: silentOnFailure)
             }
         }
@@ -189,11 +190,14 @@ extension DocumentWindowController {
     /// it, so they never flash one.
     private static let fileLoadIndicatorDelay: TimeInterval = 0.2
 
-    private func scheduleFileLoadIndicator(for url: URL) {
+    /// Returns this read's request ID; the newest read owns the spinner.
+    private func scheduleFileLoadIndicator(for url: URL) -> UUID {
         let url = url.standardizedFileURL
+        let requestID = UUID()
+        fileLoadIndicatorRequestID = requestID
         // A reload of the file already loading keeps its spinner; a new
         // file drops the abandoned one's straight away.
-        guard fileLoadIndicatorURL != url else { return }
+        guard fileLoadIndicatorURL != url else { return requestID }
         fileLoadIndicatorWork?.cancel()
         mainSplit?.setLoadingFile(nil)
         fileLoadIndicatorURL = url
@@ -202,12 +206,14 @@ extension DocumentWindowController {
         }
         fileLoadIndicatorWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.fileLoadIndicatorDelay, execute: work)
+        return requestID
     }
 
-    /// Only that file's own read may clear its spinner: a stale read
-    /// finishing late must not clear the spinner of the file now loading.
-    private func finishFileLoadIndicator(for url: URL) {
-        guard fileLoadIndicatorURL == url.standardizedFileURL else { return }
+    /// Only the newest read may clear the spinner: an older read finishing
+    /// late — even of the same file — must not clear it while a newer one
+    /// is still loading.
+    private func finishFileLoadIndicator(requestID: UUID) {
+        guard fileLoadIndicatorRequestID == requestID else { return }
         cancelFileLoadIndicator()
     }
 
@@ -215,6 +221,7 @@ extension DocumentWindowController {
         fileLoadIndicatorWork?.cancel()
         fileLoadIndicatorWork = nil
         fileLoadIndicatorURL = nil
+        fileLoadIndicatorRequestID = nil
         mainSplit?.setLoadingFile(nil)
     }
 
@@ -236,8 +243,9 @@ extension DocumentWindowController {
         }
     }
 
-    private func applyLoadFailure(error: NSError, fileURL: URL, silentOnFailure: Bool) {
-        finishFileLoadIndicator(for: fileURL)
+    private func applyLoadFailure(error: NSError, fileURL: URL,
+                                  indicatorRequestID: UUID, silentOnFailure: Bool) {
+        finishFileLoadIndicator(requestID: indicatorRequestID)
         if pendingEditModeURL == fileURL.standardizedFileURL {
             pendingEditModeURL = nil
             dismissEditChrome()
