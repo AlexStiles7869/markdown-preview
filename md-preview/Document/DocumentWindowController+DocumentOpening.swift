@@ -165,6 +165,7 @@ extension DocumentWindowController {
     }
 
     func loadFile(at url: URL, silentOnFailure: Bool = false) {
+        scheduleFileLoadIndicator(for: url)
         Task { @concurrent [weak self] in
             do {
                 let text = try String(contentsOf: url, encoding: .utf8)
@@ -181,8 +182,47 @@ extension DocumentWindowController {
         }
     }
 
+    /// Reading a cloud file that isn't on disk yet blocks until macOS
+    /// downloads it. The sidebar keeps highlighting the previous file until
+    /// the new one displays, so a read still running after this delay
+    /// shows a spinner on the file's row. Local reads finish well inside
+    /// it, so they never flash one.
+    private static let fileLoadIndicatorDelay: TimeInterval = 0.2
+
+    private func scheduleFileLoadIndicator(for url: URL) {
+        let url = url.standardizedFileURL
+        // A reload of the file already loading keeps its spinner; a new
+        // file drops the abandoned one's straight away.
+        guard fileLoadIndicatorURL != url else { return }
+        fileLoadIndicatorWork?.cancel()
+        mainSplit?.setLoadingFile(nil)
+        fileLoadIndicatorURL = url
+        let work = DispatchWorkItem { [weak self] in
+            self?.mainSplit?.setLoadingFile(url)
+        }
+        fileLoadIndicatorWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.fileLoadIndicatorDelay, execute: work)
+    }
+
+    /// Only that file's own read may clear its spinner: a stale read
+    /// finishing late must not clear the spinner of the file now loading.
+    private func finishFileLoadIndicator(for url: URL) {
+        guard fileLoadIndicatorURL == url.standardizedFileURL else { return }
+        cancelFileLoadIndicator()
+    }
+
+    private func cancelFileLoadIndicator() {
+        fileLoadIndicatorWork?.cancel()
+        fileLoadIndicatorWork = nil
+        fileLoadIndicatorURL = nil
+        mainSplit?.setLoadingFile(nil)
+    }
+
     func applyLoadedMarkdown(_ text: String, fileURL: URL) {
         guard currentFileURL?.standardizedFileURL == fileURL.standardizedFileURL else { return }
+        // The current file is on screen, so any other read in flight is
+        // abandoned — including when Search for Document supplied the text.
+        cancelFileLoadIndicator()
         currentMarkdown = text
         resetAutoSaveFeedback()
         updateWindowSubtitle()
@@ -197,6 +237,7 @@ extension DocumentWindowController {
     }
 
     private func applyLoadFailure(error: NSError, fileURL: URL, silentOnFailure: Bool) {
+        finishFileLoadIndicator(for: fileURL)
         if pendingEditModeURL == fileURL.standardizedFileURL {
             pendingEditModeURL = nil
             dismissEditChrome()

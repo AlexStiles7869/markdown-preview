@@ -204,6 +204,13 @@ final class SidebarViewController: NSViewController {
         setOpenFileURL(newURL)
     }
 
+    /// Spinner on the navigator row of a file that is still loading; nil
+    /// clears it.
+    func setLoadingFile(_ fileURL: URL?) {
+        loadViewIfNeeded()
+        projectNavigator.setLoadingFile(fileURL)
+    }
+
     /// The folder the Project Navigator is rooted at — the closest thing the
     /// app has to "the current project". Read from `pendingFolderURL` rather
     /// than `loadedFolderURL` so it is right even in TOC mode, where the tree

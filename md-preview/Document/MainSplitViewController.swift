@@ -176,6 +176,10 @@ final class MainSplitViewController: NSSplitViewController {
         showSidebar()
     }
 
+    func setLoadingFile(_ fileURL: URL?) {
+        sidebarViewController?.setLoadingFile(fileURL)
+    }
+
     func clearContent() {
         inspectorViewController?.setSelectedText(nil)
         contentViewController?.clearContent()

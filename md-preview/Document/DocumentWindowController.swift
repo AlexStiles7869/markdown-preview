@@ -88,6 +88,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
     /// When sidebar navigation starts from edit mode, the newly loaded file
     /// should return to edit mode instead of dropping the user into preview.
     var pendingEditModeURL: URL?
+    /// The file read that may show the sidebar's loading spinner, and the
+    /// delayed work that shows it. See `scheduleFileLoadIndicator(for:)`.
+    var fileLoadIndicatorURL: URL?
+    var fileLoadIndicatorWork: DispatchWorkItem?
     var searchOpenRequestID: UUID?
     var autoSaveTimer: Timer?
     var autoSaveTimerID: UUID?
