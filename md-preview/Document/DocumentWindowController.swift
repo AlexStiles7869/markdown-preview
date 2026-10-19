@@ -684,6 +684,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSTo
         refreshOpenActionsItem()
         startWatching(newURL)
         if let markdown = currentMarkdown {
+            // No new read starts here, and a reload still in flight for the
+            // old URL won't apply, so nothing else would clear its spinner.
+            cancelFileLoadIndicator()
             (documentWindow.contentViewController as? MainSplitViewController)?
                 .openFileURLDidChange(newURL, markdown: markdown)
         } else {

@@ -218,7 +218,7 @@ extension DocumentWindowController {
         cancelFileLoadIndicator()
     }
 
-    private func cancelFileLoadIndicator() {
+    func cancelFileLoadIndicator() {
         fileLoadIndicatorWork?.cancel()
         fileLoadIndicatorWork = nil
         fileLoadIndicatorURL = nil
