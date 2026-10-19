@@ -169,7 +169,8 @@ extension DocumentWindowController {
         Task { @concurrent [weak self] in
             do {
                 let text = try String(contentsOf: url, encoding: .utf8)
-                await self?.applyLoadedMarkdown(text, fileURL: url)
+                await self?.applyLoadedMarkdown(text, fileURL: url,
+                                                indicatorRequestID: indicatorRequestID)
             } catch {
                 // Wrap as NSError (Sendable) so the original presentation —
                 // localizedDescription + recovery suggestion — survives the
@@ -225,8 +226,12 @@ extension DocumentWindowController {
         mainSplit?.setLoadingFile(nil)
     }
 
-    func applyLoadedMarkdown(_ text: String, fileURL: URL) {
+    /// `loadFile` passes its read's request ID. A read that a newer one has
+    /// superseded is dropped, so it can neither put older text on screen
+    /// nor clear the newer read's spinner.
+    func applyLoadedMarkdown(_ text: String, fileURL: URL, indicatorRequestID: UUID? = nil) {
         guard currentFileURL?.standardizedFileURL == fileURL.standardizedFileURL else { return }
+        if let indicatorRequestID, indicatorRequestID != fileLoadIndicatorRequestID { return }
         // The current file is on screen, so any other read in flight is
         // abandoned — including when Search for Document supplied the text.
         cancelFileLoadIndicator()
