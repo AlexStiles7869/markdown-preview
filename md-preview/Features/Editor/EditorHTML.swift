@@ -88,6 +88,16 @@ nonisolated enum EditorHTML {
             height: 100%;
             box-sizing: border-box;
         }
+        \(MarkdownHTML.mathStylesheet)
+        /* Source separator lines own block spacing in CodeMirror. */
+        #editor .math-display { margin-top: 0; }
+        /* Nested math shares a CodeMirror line with the hidden quote/list
+           prefix. A block-level div would add empty line boxes around it. */
+        #editor .cm-line .math-display {
+            display: inline-block;
+            width: 100%;
+            vertical-align: top;
+        }
         .cm-editor { height: 100%; outline: none; }
         .cm-editor.cm-focused { outline: none; }
         /* CodeMirror injects its base theme into <head> at runtime — after
@@ -217,7 +227,8 @@ nonisolated enum EditorHTML {
            rule per nesting level as background images (positions inline).
            The rule stops above the block gap the bundle adds when another
            block follows the quotation without a blank line. */
-        #editor .cm-content > .cm-line.cm-md-quote {
+        #editor .cm-content > .cm-line.cm-md-quote,
+        #editor .cm-md-code-card > .cm-line.cm-md-quote {
             padding-inline-end: 1em;
             padding-top: var(--cm-md-quote-top);
             padding-bottom: calc(var(--cm-md-quote-bottom) + var(--cm-md-block-gap, 0px));
@@ -678,6 +689,32 @@ nonisolated enum EditorHTML {
         <body>
         <div id="editor"></div>
         \(includesMermaid ? "<script>\(mermaidJavaScript)</script>" : "")
+        <script>
+        \(MarkdownHTML.mathElementRenderer)
+        window.__mdRenderMathElement = renderMathElement;
+        // Loaded once, on the first rendered formula, including newly typed math.
+        window.__mdLoadMath = function () {
+            if (!window.__mdMathLoading) {
+                const loaded = (element) => new Promise((resolve, reject) => {
+                    element.onload = resolve;
+                    element.onerror = reject;
+                    document.head.appendChild(element);
+                });
+                const css = document.createElement('link');
+                css.rel = 'stylesheet';
+                css.href = '\(MarkdownAssetScheme.vendorURL("katex.min.css"))';
+                const script = document.createElement('script');
+                script.src = '\(MarkdownAssetScheme.vendorURL("katex.min.js"))';
+                window.__mdMathLoading = Promise.all([loaded(css), loaded(script)]).catch((error) => {
+                    css.remove();
+                    script.remove();
+                    window.__mdMathLoading = null;
+                    throw error;
+                });
+            }
+            return window.__mdMathLoading;
+        };
+        </script>
         <script>\(editorJavaScript)</script>
         <script>
         (function () {
@@ -691,6 +728,7 @@ nonisolated enum EditorHTML {
                 return messages;
             })();
             window.__mdTableExpandLabel = \(jsStringLiteral(NSLocalizedString("Expand Table", comment: "Open a table in full screen")));
+            window.__mdMathEditLabel = \(jsStringLiteral(NSLocalizedString("Math formula. Click to edit source.", comment: "Accessibility label for a rendered equation in the editor")));
             window.__mdOpenTablePopup = function (markdown) { post({kind: "tablePopup", markdown}); };
             window.__mdRequestTableContextMenu = function (details) {
                 post(Object.assign({ kind: "tableContextMenu" }, details));
@@ -735,6 +773,7 @@ nonisolated enum EditorHTML {
                             line: \(MarkdownHTML.sourceLineHeight),
                             blankGap: \(MarkdownHTML.blankLineGap),
                             paragraph: \(MarkdownHTML.paragraphSpacing),
+                            math: \(MarkdownHTML.mathSpacing),
                             quote: \(MarkdownHTML.quoteSpacing),
                             alert: \(MarkdownHTML.largeBlockSpacing),
                             table: \(MarkdownHTML.largeBlockSpacing),

@@ -34,6 +34,406 @@ final class EditorPreviewLayoutTests: XCTestCase {
         return "data:image/svg+xml;base64,\(Data(svg.utf8).base64EncodedString())"
     }
 
+    func testMathRendersWithSharedKaTeX() async throws {
+        let source = "Inline $x_1 + x_2$.\n\n$$\nE = mc^2\n$$\n\n```math\nx^2\n```"
+        let html = EditorHTML.render(markdown: source,
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 900, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        defer { editor.close() }
+        _ = try await editor.layout(texts: [], imageCount: 0,
+            selectors: [".katex": 3, ".katex-display": 2, ".katex-error": 0])
+        let saved = try await editor.webView.evaluateJavaScript("window.__mdEditor.getMarkdown()")
+        XCTAssertEqual(saved as? String, source)
+    }
+
+    func testInlineMathSourceUsesInlineCodeStyling() async throws {
+        let source = "Code `x^2`; math $x^2$; literal $ x^2 $."
+        let html = EditorHTML.render(markdown: source,
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = editor.webView
+        defer { editor.close(); window.contentView = nil }
+        _ = try await editor.layout(texts: [], imageCount: 0,
+            selectors: [".katex": 1, ".cm-md-inline-code": 1])
+        let result = try await editor.webView.callAsyncJavaScript("""
+            document.hasFocus = () => true;
+            window.__mdEditor.focus();
+            window.__mdEditor.select(source.indexOf('$x') + 2);
+            for (let i = 0; i < 4; i++) {
+                window.__layoutTestFrame();
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            const spans = [...document.querySelectorAll('.cm-md-inline-code')];
+            const styles = spans.map(span => {
+                const style = getComputedStyle(span);
+                return [style.fontFamily, style.fontSize, style.backgroundColor,
+                    style.border, style.borderRadius, style.padding];
+            });
+            return {
+                content: spans.map(span => span.textContent),
+                sameStyle: styles.length === 2 && JSON.stringify(styles[0]) === JSON.stringify(styles[1]),
+                literal: document.querySelector('.cm-content').textContent.includes('$ x^2 $'),
+                cards: document.querySelectorAll('.cm-md-code-card').length,
+                markdown: window.__mdEditor.getMarkdown()
+            };
+            """, arguments: ["source": source], in: nil, contentWorld: .page)
+        let values = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(values["content"] as? [String], ["x^2", "x^2"])
+        XCTAssertEqual(values["sameStyle"] as? Bool, true)
+        XCTAssertEqual(values["literal"] as? Bool, true)
+        XCTAssertEqual(values["cards"] as? Int, 0)
+        XCTAssertEqual(values["markdown"] as? String, source)
+        _ = try await editor.webView.evaluateJavaScript("window.__mdEditor.select(\(source.count))")
+        _ = try await editor.layout(texts: [], imageCount: 0,
+            selectors: [".katex": 1, ".cm-md-inline-code": 1])
+    }
+
+    func testMathSourceUsesTheSharedCodeCard() async throws {
+        for (formula, fenced, scrolls) in [
+            ("$$\n\\frac{1}{x}\n$$", false, false),
+            ("$$ \\frac{1}{x} $$", false, false),
+            ("> $$\n> \\frac{1}{x}\n> $$", false, false),
+            ("- $$\n  \\frac{1}{x}\n  $$", false, false),
+            ("$$\n\\frac{1}{" + String(repeating: "x", count: 240) + "}\n$$", false, true),
+            ("```math\n\\frac{1}{x}\n```", true, false),
+        ] {
+            let source = "Before\n\n" + formula + "\n\nAfter"
+            let html = EditorHTML.render(markdown: source,
+                editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+            let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+                schemeHandlers: ["md-asset": EditorMathAssets()])
+            let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            window.contentView = editor.webView
+            defer {
+                editor.close()
+                window.contentView = nil
+            }
+            _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+            let result = try await editor.webView.callAsyncJavaScript("""
+                // Supply focus for the hidden host, as in the marker-editing tests.
+                document.hasFocus = () => true;
+                window.__mdEditor.focus();
+                window.__mdEditor.select(source.indexOf('frac') + 2);
+                for (let i = 0; i < 4; i++) {
+                    window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                const card = document.querySelector('.cm-md-code-card');
+                const delimiters = [...document.querySelectorAll('.cm-md-fence-info')];
+                return {
+                    cards: document.querySelectorAll('.cm-md-code-card').length,
+                    language: card?.querySelector('.cm-md-code-language-input')?.value || '',
+                    actions: card?.querySelectorAll('.cm-md-code-action').length,
+                    rows: card?.querySelectorAll('.cm-line').length,
+                    delimiters: delimiters.map(node => node.textContent).join(''),
+                    visible: delimiters.every(node => getComputedStyle(node).visibility === 'visible'),
+                    scrolls: card && card.scrollWidth > card.clientWidth,
+                    widths: card && [card.scrollWidth, card.clientWidth],
+                    radius: card && getComputedStyle(card).borderRadius,
+                    rendered: !!document.querySelector('.math-display'),
+                    markdown: window.__mdEditor.getMarkdown()
+                };
+                """, arguments: ["source": source], in: nil, contentWorld: .page)
+            let values = try XCTUnwrap(result as? [String: Any])
+            XCTAssertEqual(values["cards"] as? Int, 1, formula)
+            XCTAssertEqual(values["language"] as? String, fenced ? "math" : "", formula)
+            XCTAssertEqual(values["actions"] as? Int, fenced ? 2 : 0, formula)
+            XCTAssertEqual(values["rows"] as? Int, fenced ? 1 : formula.components(separatedBy: "\n").count, formula)
+            if !fenced {
+                XCTAssertEqual(values["delimiters"] as? String, "$$$$", formula)
+                XCTAssertEqual(values["visible"] as? Bool, true, formula)
+            }
+            XCTAssertEqual(values["scrolls"] as? Bool, scrolls, "\(formula) widths: \(values["widths"] ?? "missing")")
+            XCTAssertEqual(values["radius"] as? String, "16px", formula)
+            XCTAssertEqual(values["rendered"] as? Bool, false, formula)
+            XCTAssertEqual(values["markdown"] as? String, source)
+            if fenced {
+                let wrapped = try await editor.webView.callAsyncJavaScript("""
+                    document.querySelector('.cm-md-code-toggle-wrap').click();
+                    for (let i = 0; i < 4; i++) {
+                        window.__layoutTestFrame();
+                        await new Promise(resolve => setTimeout(resolve, 10));
+                    }
+                    const card = document.querySelector('.cm-md-code-card-wrapped');
+                    return !!card && card.scrollWidth <= card.clientWidth
+                        && window.__mdEditor.getMarkdown() === source;
+                    """, arguments: ["source": source], in: nil, contentWorld: .page)
+                XCTAssertEqual(wrapped as? Bool, true, formula)
+            }
+            _ = try await editor.webView.evaluateJavaScript("window.__mdEditor.select(\(source.count))")
+            _ = try await editor.layout(texts: [], imageCount: 0,
+                selectors: [".katex": 1, ".cm-md-code-card": 0])
+        }
+    }
+
+    func testNativeTypingCompletesDollarMath() async throws {
+        let html = EditorHTML.render(markdown: "",
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = editor.webView
+        defer { editor.close(); window.contentView = nil }
+        _ = try await editor.layout(texts: [], imageCount: 0)
+        let result = try await editor.webView.callAsyncJavaScript("""
+            document.hasFocus = () => true;
+            window.__mdEditor.focus();
+            const settle = async () => {
+                for (let i = 0; i < 4; i++) {
+                    window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            };
+            for (const character of '$$') {
+                document.execCommand('insertText', false, character);
+                await settle();
+            }
+            const unpaired = window.__mdEditor.getMarkdown();
+            document.execCommand('insertParagraph', false);
+            await settle();
+            const paired = window.__mdEditor.getMarkdown();
+            const caret = window.__mdEditor.getLinkSelection(false).from;
+            document.execCommand('insertText', false, 'x');
+            await settle();
+            return { unpaired, paired, caret, markdown: window.__mdEditor.getMarkdown() };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let values = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(values["unpaired"] as? String, "$$")
+        XCTAssertEqual(values["paired"] as? String, "$$\n\n$$")
+        XCTAssertEqual(values["caret"] as? Int, 3)
+        XCTAssertEqual(values["markdown"] as? String, "$$\nx\n$$")
+    }
+
+    func testClickingMathPreservesOpeningDelimiters() async throws {
+        for (formula, offset) in [("$x$", 1), ("$$x$$", 2), ("$$\nx\n$$", 3)] {
+            let source = "Before\n\n" + formula + "\n\nAfter"
+            let html = EditorHTML.render(markdown: source,
+                editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+            let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+                schemeHandlers: ["md-asset": EditorMathAssets()])
+            let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            window.contentView = editor.webView
+            defer { editor.close(); window.contentView = nil }
+            _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+            let result = try await editor.webView.callAsyncJavaScript("""
+                document.hasFocus = () => true;
+                document.querySelector('.math').dispatchEvent(new MouseEvent('mousedown', {
+                    bubbles: true, cancelable: true
+                }));
+                document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                for (let i = 0; i < 4; i++) {
+                    window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                document.execCommand('insertText', false, 'z');
+                for (let i = 0; i < 4; i++) {
+                    window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                return window.__mdEditor.getMarkdown();
+                """, arguments: [:], in: nil, contentWorld: .page)
+            var expected = source
+            expected.insert("z", at: expected.index(expected.startIndex, offsetBy: 8 + offset))
+            XCTAssertEqual(result as? String, expected)
+        }
+    }
+
+    func testClickingFencedMathHidesRawFences() async throws {
+        let source = "Before\n\n```math\n\\frac{1}{x}\n```\n\nAfter"
+        let html = EditorHTML.render(markdown: source,
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                              backing: .buffered, defer: false)
+        window.contentView = editor.webView
+        defer { editor.close(); window.contentView = nil }
+        _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+        let result = try await editor.webView.callAsyncJavaScript("""
+            document.hasFocus = () => true;
+            document.querySelector('.math-display').dispatchEvent(new MouseEvent('mousedown', {
+                bubbles: true, cancelable: true
+            }));
+            document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+            for (let i = 0; i < 4; i++) {
+                window.__layoutTestFrame();
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            const raw = [...document.querySelectorAll('.cm-line')].find(line => line.textContent.includes('```math'));
+            return {
+                rawHeight: raw?.getBoundingClientRect().height || 0,
+                language: document.querySelector('.cm-md-code-language-input')?.value,
+                caret: window.__mdEditor.getLinkSelection(false).from,
+                markdown: window.__mdEditor.getMarkdown()
+            };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let values = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(values["rawHeight"] as? Double, 0)
+        XCTAssertEqual(values["language"] as? String, "math")
+        XCTAssertEqual(values["caret"] as? Int, source.range(of: "\\frac")!.lowerBound.utf16Offset(in: source))
+        XCTAssertEqual(values["markdown"] as? String, source)
+    }
+
+    func testKeyboardEntryRevealsFencedMathSource() async throws {
+        let source = "Before\n\n```math\nx^2\n```\n\nAfter"
+        let html = EditorHTML.render(markdown: source,
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 900, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        defer { editor.close() }
+        _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+        let result = try await editor.webView.callAsyncJavaScript("""
+            window.__mdEditor.focus();
+            window.__mdEditor.select(7);
+            for (let i = 0; i < 2; i++) {
+                document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'ArrowRight', code: 'ArrowRight', bubbles: true, cancelable: true
+                }));
+                window.__layoutTestFrame();
+            }
+            return {
+                rendered: !!document.querySelector('.math-display'),
+                sourceVisible: document.querySelector('.cm-content').textContent.includes('x^2'),
+                markdown: window.__mdEditor.getMarkdown()
+            };
+            """, arguments: [:], in: nil, contentWorld: .page)
+        let values = try XCTUnwrap(result as? [String: Any])
+        XCTAssertEqual(values["rendered"] as? Bool, false)
+        XCTAssertEqual(values["sourceVisible"] as? Bool, true)
+        XCTAssertEqual(values["markdown"] as? String, source)
+    }
+
+    func testQuotedMathDoesNotAddEmptyDelimiterLines() async throws {
+        for source in [">$$\n>equation\n>$$", "> $$\n> x^2\n> $$"] {
+            let html = EditorHTML.render(markdown: source,
+                editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+            let editor = WebViewLayoutHarness(html: html, width: 900, isEditor: true,
+                schemeHandlers: ["md-asset": EditorMathAssets()])
+            defer { editor.close() }
+            _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+            let extraHeight = try await editor.webView.evaluateJavaScript("""
+                (() => {
+                    const math = document.querySelector('.math-display');
+                    const line = math.closest('.cm-line');
+                    const style = getComputedStyle(line);
+                    return line.getBoundingClientRect().height - math.getBoundingClientRect().height
+                        - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
+                })()
+                """)
+            // The line's strut can stand a pixel taller than a short formula;
+            // an empty delimiter line would add a whole source line.
+            XCTAssertLessThan(try XCTUnwrap(extraHeight as? Double), MarkdownHTML.sourceLineHeight / 2, source)
+            let saved = try await editor.webView.evaluateJavaScript("window.__mdEditor.getMarkdown()")
+            XCTAssertEqual(saved as? String, source)
+        }
+    }
+
+    func testDisplayMathSpacingMatchesPreview() async throws {
+        for (name, formula) in [
+            ("single-line", "$$ x^2 $$"),
+            ("multiline", "$$\nx^2\n$$"),
+            ("fenced", "```math\nx^2\n```"),
+        ] {
+            try await check(Fixture(name: "math-spacing-\(name)",
+                markdown: "Before equation.\n\n\(formula)\n\nAfter equation.",
+                texts: ["Before equation.", "After equation."],
+                readSelectors: [".katex": 1], editorSelectors: [".katex": 1]))
+        }
+    }
+
+    func testArrowKeysEnterRenderedMath() async throws {
+        for formula in ["$$x$$", "$$\nx\ny\n$$", "```math\nx\ny\n```",
+                        "> $$\n> x\n> $$", "- $$\n  x\n  $$"] {
+            let source = "Before\n\n" + formula + "\n\nAfter"
+            let html = EditorHTML.render(markdown: source,
+                editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+            let editor = WebViewLayoutHarness(html: html, width: 500, isEditor: true,
+                schemeHandlers: ["md-asset": EditorMathAssets()])
+            let window = NSWindow(contentRect: editor.webView.frame, styleMask: .borderless,
+                                  backing: .buffered, defer: false)
+            window.contentView = editor.webView
+            defer { editor.close(); window.contentView = nil }
+            _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+            let result = try await editor.webView.callAsyncJavaScript("""
+                document.hasFocus = () => true;
+                const settle = async () => {
+                    for (let i = 0; i < 4; i++) window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                };
+                const traces = [];
+                for (const [key, start] of [['ArrowDown', 0], ['ArrowUp', source.length]]) {
+                    window.__mdEditor.focus();
+                    window.__mdEditor.select(start);
+                    await settle();
+                    const positions = [];
+                    for (let i = 0; i < 4; i++) {
+                        document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown', {
+                            key, code: key, bubbles: true, cancelable: true
+                        }));
+                        await settle();
+                        positions.push({caret: window.__mdEditor.getLinkSelection(false).from,
+                            rendered: !!document.querySelector('.math-display')});
+                    }
+                    traces.push(positions);
+                }
+                return JSON.stringify(traces);
+                """, arguments: ["source": source], in: nil, contentWorld: .page)
+            let json = try XCTUnwrap(result as? String)
+            let traces = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [[[String: Any]]])
+            for trace in traces {
+                XCTAssertTrue(trace.contains { step in
+                    guard let caret = step["caret"] as? Int else { return false }
+                    return (8...(8 + formula.utf16.count)).contains(caret) && step["rendered"] as? Bool == false
+                }, "Skipped \(formula): \(json)")
+            }
+        }
+    }
+
+    func testArrowUpEntersPreviousMathAtItsClosingDelimiter() async throws {
+        let source = "$$\na\n$$\n\n$$\nb"
+        let html = EditorHTML.render(markdown: source,
+            editorJavaScript: try TestVendor.script("md-preview/Vendor/CodeMirror/mdedit.min.js"))
+        let editor = WebViewLayoutHarness(html: html, width: 900, isEditor: true,
+            schemeHandlers: ["md-asset": EditorMathAssets()])
+        defer { editor.close() }
+        _ = try await editor.layout(texts: [], imageCount: 0, selectors: [".katex": 1])
+        let result = try await editor.webView.callAsyncJavaScript("""
+            const settle = async () => {
+                for (let i = 0; i < 3; i++) {
+                    window.__layoutTestFrame();
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            };
+            window.__mdEditor.focus();
+            window.__mdEditor.select(source.length);
+            await settle();
+            const lines = [];
+            for (let i = 0; i < 3; i++) {
+                document.querySelector('.cm-content').dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'ArrowUp', code: 'ArrowUp', bubbles: true, cancelable: true
+                }));
+                await settle();
+                const selection = window.getSelection();
+                lines.push(window.__mdEditor.getLinkSelection(false).from);
+            }
+            window.__mdEditor.exec('bold');
+            return { markdown: window.__mdEditor.getMarkdown(), lines };
+            """, arguments: ["source": source], in: nil, contentWorld: .page)
+        let values = try XCTUnwrap(result as? [String: Any])
+        let markdown = try XCTUnwrap(values["markdown"] as? String)
+        let inserted = try XCTUnwrap(markdown.range(of: "****"))
+        let offset = markdown.distance(from: markdown.startIndex, to: inserted.lowerBound)
+        XCTAssertEqual(values["lines"] as? [Int], [10, 8, 7])
+        XCTAssertTrue((5...7).contains(offset), "Caret landed at \(offset), lines: \(values["lines"] ?? "missing")")
+    }
+
     func testParagraphAndHeadingAlignment() async throws {
         try await check(Fixture(name: "paragraphs-headings", markdown: """
             # First heading
@@ -202,7 +602,8 @@ final class EditorPreviewLayoutTests: XCTestCase {
             let host = HostBridge()
             let reader = WebViewLayoutHarness(html: readerHTML, width: width, isEditor: false, zoom: zoom, height: fixture.height, messageHandler: host)
             let editor = WebViewLayoutHarness(html: editorHTML, width: initial == nil ? width : 1100,
-                                              isEditor: true, zoom: zoom, height: fixture.height, messageHandler: host)
+                                              isEditor: true, zoom: zoom, height: fixture.height, messageHandler: host,
+                                              schemeHandlers: ["md-asset": EditorMathAssets()])
             defer { reader.close(); editor.close() }
             var readLayout: WebViewLayoutHarness.Layout?
             var editLayout: WebViewLayoutHarness.Layout?

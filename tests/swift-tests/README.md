@@ -23,7 +23,7 @@ real `WKWebView` instances. The editor, DOMPurify, syntax highlighting, Mermaid,
 and KaTeX use the actual vendored resources. Images use local data URLs. There
 is no network dependency, renderer stub, or duplicate test stylesheet.
 
-**21 test cases run in four configurations: 84 paired WebKit runs.** The matrix
+**24 test cases run in four configurations: 96 paired WebKit runs.** The matrix
 uses 500, 900, and 1280-point viewports, including a 1280-point full-width column,
 and both editor scrolling configurations.
 
@@ -46,7 +46,7 @@ instead of skipping content outside CodeMirror's virtualized viewport.
 
 ### What equality means
 
-**18 cases (72 runs)** compare cumulative geometry: column origins/widths, visible
+**21 cases (84 runs)** compare cumulative geometry: column origins/widths, visible
 text lines, image rectangles, table rows, horizontal rules, and Mermaid figures
 and SVGs, within **1 CSS pixel**. They compare X/Y, width/height, wrapped line
 counts, and selected computed emphasis styles. Text probes cross DOM nodes, so
@@ -58,11 +58,11 @@ exactly its declared **20 CSS pixels per header** when comparing downstream Y
 positions; they never subtract a measured discrepancy or relax other geometry.
 
 **Three cases (12 runs)** also include features that intentionally remain source
-in the editor: metadata, tasks, math, alerts, reference syntax, footnotes, HTML,
+in the editor: metadata, tasks, alerts, reference syntax, footnotes, HTML,
 and formatting inside table cells. They assert actual reader feature counts,
 visible editor source, unchanged Markdown, column alignment, and local alignment
 and wrapping of shared text around those features. They do **not** claim equal
-block heights for a rendered equation versus its editable source. Editor-only source cues (such as Setext underline markers) are not a claim of
+block heights for features whose editor representation remains source. Editor-only source cues (such as Setext underline markers) are not a claim of
 pixel-identical screenshots. Every fixture also verifies that rendering preserves
 the exact original Markdown.
 

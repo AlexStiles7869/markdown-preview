@@ -388,6 +388,7 @@
 
 /* Table fullscreen control. */
 "Expand Table" = "گسترش جدول";
+"Math formula. Click to edit source." = "فرمول ریاضی. برای ویرایش کد منبع کلیک کنید.";
 
 /* Additional settings, navigation, formatting, and export strings. */
 "GitHub Project" = "پروژهٔ GitHub";

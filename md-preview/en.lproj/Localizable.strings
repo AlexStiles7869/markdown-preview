@@ -389,6 +389,7 @@
 
 /* Table fullscreen control. */
 "Expand Table" = "Expand Table";
+"Math formula. Click to edit source." = "Math formula. Click to edit source.";
 
 /* Additional settings, navigation, formatting, and export strings. */
 "GitHub Project" = "GitHub Project";

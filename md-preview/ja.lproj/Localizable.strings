@@ -389,6 +389,7 @@
 
 /* Table fullscreen control. */
 "Expand Table" = "表を拡大";
+"Math formula. Click to edit source." = "数式。クリックしてソースを編集します。";
 
 /* Additional settings, navigation, formatting, and export strings. */
 "GitHub Project" = "GitHub プロジェクト";
