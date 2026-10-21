@@ -122,7 +122,8 @@ nonisolated extension MarkdownHTML {
            below both get the right appearance without a second palette, and
            labels and separators follow increased-contrast settings.
            Accent colors follow the theme's link color. */
-        --text: -apple-system-label;
+        \(textColorCSS)
+        \(quoteIndentCSS)
         --secondary: -apple-system-secondary-label;
         --tertiary: -apple-system-tertiary-label;
         --quote-border: -apple-system-quaternary-label;
@@ -238,6 +239,7 @@ nonisolated extension MarkdownHTML {
         background: transparent;
         padding: calc((\(pagePaddingTop)px + var(--mdp-page-top-clearance, 0px)) / var(--mdp-chrome-zoom, 1)) var(--mdp-page-padding, \(pagePaddingHorizontal)px) \(pagePaddingBottom)px;
         -webkit-font-smoothing: antialiased;
+        \(bodyTextRenderingCSS)
     }
     /* Reader spacing tweaks stop at code — whitespace fidelity wins. */
     pre, code {
@@ -501,8 +503,7 @@ nonisolated extension MarkdownHTML {
         padding: 0;
         background: transparent;
         border: 0;
-        /* Block code reads at the body size; only inline code steps down. */
-        font-size: 1em;
+        \(codeBlockTypeCSS)
     }
     .md-code-wrap {
         position: relative;
@@ -709,7 +710,7 @@ nonisolated extension MarkdownHTML {
         position: relative;
         margin: \(quoteSpacing)px 0 0;
         padding: 0.4em 1em;
-        padding-inline-start: 1.5em;
+        padding-inline-start: var(--mdp-quote-indent);
         color: var(--secondary);
     }
     blockquote::before {

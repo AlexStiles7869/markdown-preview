@@ -37,7 +37,8 @@ nonisolated enum EditorHTML {
         :root {
             color-scheme: light dark;
             /* Semantic system colors resolve per appearance on their own. */
-            --text: -apple-system-label;
+            \(MarkdownHTML.textColorCSS)
+            \(MarkdownHTML.quoteIndentCSS)
             --secondary: -apple-system-secondary-label;
             --quote-border: -apple-system-quaternary-label;
             --grid: -apple-system-separator;
@@ -73,6 +74,15 @@ nonisolated enum EditorHTML {
             line-height: \(MarkdownHTML.bodyLineHeight);
             color: var(--text);
             -webkit-font-smoothing: antialiased;
+            \(MarkdownHTML.bodyTextRenderingCSS)
+        }
+        /* The body em as a computed length: a line's own em shrinks on code
+           lines (0.9em), but a list indent on that line must keep the text
+           column, as the preview's list item does around its pre. */
+        @property --mdp-body-em {
+            syntax: "<length>";
+            inherits: true;
+            initial-value: \(MarkdownHTML.bodyFontSize)px;
         }
         #editor {
             height: 100%;
@@ -99,6 +109,7 @@ nonisolated enum EditorHTML {
             line-height: \(MarkdownHTML.bodyLineHeight);
         }
         #editor .cm-content {
+            --mdp-body-em: 1em;
             width: 100%;
             max-width: \(columnMaxWidth);
             min-height: 100%;
@@ -403,8 +414,7 @@ nonisolated enum EditorHTML {
         }
         #editor .cm-md-codeblock {
             font-family: ui-monospace, "SF Mono", Menlo, monospace;
-            font-size: 1em;
-            line-height: 1.3;
+            \(MarkdownHTML.codeBlockTypeCSS)
             position: relative;
             padding: 0;
             white-space: pre;
