@@ -210,14 +210,6 @@ extension DocumentWindowController {
         return requestID
     }
 
-    /// Only the newest read may clear the spinner: an older read finishing
-    /// late — even of the same file — must not clear it while a newer one
-    /// is still loading.
-    private func finishFileLoadIndicator(requestID: UUID) {
-        guard fileLoadIndicatorRequestID == requestID else { return }
-        cancelFileLoadIndicator()
-    }
-
     func cancelFileLoadIndicator() {
         fileLoadIndicatorWork?.cancel()
         fileLoadIndicatorWork = nil
@@ -248,9 +240,14 @@ extension DocumentWindowController {
         }
     }
 
+    /// Only the newest read may report a failure: an older read failing
+    /// late — even of the same file — must not clear the newer read's
+    /// spinner, cancel its pending edit mode, or alert over the file now
+    /// on screen.
     private func applyLoadFailure(error: NSError, fileURL: URL,
                                   indicatorRequestID: UUID, silentOnFailure: Bool) {
-        finishFileLoadIndicator(requestID: indicatorRequestID)
+        guard indicatorRequestID == fileLoadIndicatorRequestID else { return }
+        cancelFileLoadIndicator()
         if pendingEditModeURL == fileURL.standardizedFileURL {
             pendingEditModeURL = nil
             dismissEditChrome()
