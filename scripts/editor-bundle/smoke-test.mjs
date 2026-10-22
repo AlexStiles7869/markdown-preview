@@ -1325,4 +1325,297 @@ check("search reveals and highlights Mermaid source", blockFindHost.querySelecto
 check("searching rendered blocks preserves source", blockFindEditor.getMarkdown() === blockFindSource)
 blockFindEditor.destroy()
 
+
+// Exercise the shipped KaTeX and the same rendering function used in both modes.
+const { createRequire } = await import("node:module")
+const require = createRequire(import.meta.url)
+globalThis.katex = require("../../md-preview/Vendor/KaTeX/katex.min.js")
+const mathSwift = readFileSync(new URL("../../md-preview/Rendering/MarkdownHTML+KaTeX.swift", import.meta.url), "utf8")
+const renderFunctionMatch = mathSwift.match(/static let mathElementRenderer = """([\s\S]*?)"""/)
+if (!renderFunctionMatch) throw new Error("Could not extract mathElementRenderer from MarkdownHTML+KaTeX.swift")
+const renderFunction = renderFunctionMatch[1]
+dom.window.__mdRenderMathElement = new Function(`${renderFunction}; return renderMathElement`)()
+let mathLoads = 0
+dom.window.__mdLoadMath = () => { mathLoads++; return Promise.resolve() }
+const mathHost = document.createElement("div")
+document.body.append(mathHost)
+const mathSource = "Intro\n\nInline $x_1 + \\frac{1}{2}$ and $y^2$.\n\n$$ \\sum_{i=1}^n i $$\n\n$$\n\\begin{aligned}\nx &= 1 \\\\\n\ny &= 2\n\\end{aligned}\n$$\n\nEnd"
+const mathEditor = dom.window.MDEditor.create(mathHost, mathSource, {})
+await new Promise(resolve => setTimeout(resolve, 30))
+check("inline and multiline dollar math render with bundled KaTeX", mathHost.querySelectorAll('.katex').length === 4)
+check("display math uses KaTeX display mode", mathHost.querySelectorAll('.katex-display').length === 2)
+check("math rendering preserves exact Markdown", mathEditor.getMarkdown() === mathSource)
+const unchangedMath = mathHost.querySelector('.math')
+const loadCount = mathLoads
+mathEditor.select(mathSource.length)
+mathEditor.insertTextAt('!', mathSource.length, mathSource.length)
+await new Promise(resolve => setTimeout(resolve, 10))
+check("unrelated typing retains math DOM without typesetting again", mathHost.querySelector('.math') === unchangedMath && mathLoads === loadCount)
+mathEditor.focus()
+mathEditor.select(mathSource.indexOf('frac') + 2)
+check("entering a formula reveals editable TeX", mathHost.querySelectorAll('.math').length === 3 && mathHost.textContent.includes('frac'))
+check("active TeX is syntax highlighted", !!mathHost.querySelector('.hl-keyword, .hl-string, .hl-type, .hl-number'))
+mathEditor.select(mathEditor.getMarkdown().length)
+await new Promise(resolve => setTimeout(resolve, 10))
+check("leaving a formula restores its preview", mathHost.querySelectorAll('.katex').length === 4)
+mathEditor.find('frac')
+check("find reveals math source", mathHost.textContent.includes('frac') && !!mathHost.querySelector('.cm-find-current'))
+mathEditor.destroy()
+
+const literalDollarHost = document.createElement("div")
+document.body.append(literalDollarHost)
+const literalDollarEditor = dom.window.MDEditor.create(literalDollarHost, "Prices: $5 and $10. Escaped dollar: \\$x$.", {})
+await new Promise(resolve => setTimeout(resolve, 10))
+check("an escaped dollar never closes inline math", !literalDollarHost.querySelector('.math'))
+literalDollarEditor.destroy()
+
+const emptyMathHost = document.createElement("div")
+document.body.append(emptyMathHost)
+const emptyMathEditor = dom.window.MDEditor.create(emptyMathHost, "intro\n\n```math\n```", {})
+emptyMathHost.querySelector(".math")
+  ?.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }))
+dom.window.document.dispatchEvent(new dom.window.MouseEvent("mouseup", { bubbles: true, button: 0 }))
+await new Promise(resolve => setTimeout(resolve, 10))
+emptyMathEditor.insert("x")
+check("clicking an empty math fence opens a source line inside it",
+  emptyMathEditor.getMarkdown() === "intro\n\n```math\nx\n```")
+emptyMathEditor.destroy()
+
+for (const [label, source, expected] of [
+  ["quoted", "> ```math\n> ```", "> ```math\n> x\n> ```"],
+  ["listed", "- ```math\n  ```", "- ```math\n  x\n  ```"],
+]) {
+  const host = document.createElement("div")
+  document.body.append(host)
+  const editor = dom.window.MDEditor.create(host, source, {})
+  host.querySelector(".math")
+    ?.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, button: 0, detail: 1 }))
+  dom.window.document.dispatchEvent(new dom.window.MouseEvent("mouseup", { bubbles: true, button: 0 }))
+  await new Promise(resolve => setTimeout(resolve, 10))
+  editor.insert("x")
+  check(`an empty ${label} math fence keeps its source prefix`, editor.getMarkdown() === expected)
+  editor.destroy()
+}
+
+const quotedMathHost = document.createElement("div")
+document.body.append(quotedMathHost)
+const quotedMathSource = "> $$\n> x = 1\n> $$\n\nEnd"
+const quotedMathEditor = dom.window.MDEditor.create(quotedMathHost, quotedMathSource, {})
+quotedMathEditor.focus()
+quotedMathEditor.select(quotedMathSource.indexOf('$$'))
+await new Promise(resolve => setTimeout(resolve, 10))
+const quotedMathLines = Array.from(quotedMathHost.querySelectorAll('.cm-md-codeblock')).map(line => line.textContent)
+check("quoted math source hides the quote markers of its later lines",
+  quotedMathLines.length === 3 && quotedMathLines.slice(1).every(text => !text.includes('>')))
+quotedMathEditor.destroy()
+
+for (const [label, source, count] of [
+  ['inline without spaces', '$x^2$', 1],
+  ['spaces inside both delimiters', '$ x^2 $', 0],
+  ['space after opening delimiter', '$ x^2$', 0],
+  ['space before closing delimiter', '$x^2 $', 0],
+  ['tab after opening delimiter', '$\tx^2$', 0],
+  ['tab before closing delimiter', '$x^2\t$', 0],
+  ['adjacent inline formulas', '$x$$y$', 2],
+  ['unclosed double delimiter', '$$x$', 0],
+  ['currency', 'Pay $5 and $10', 0],
+  ['escaped dollar', String.raw`\$x$`, 0],
+  ['inline code', '`$x$` and ``$$x$$``', 0],
+  ['fenced code', '```text\n$x$\n$$y$$\n```', 0],
+  ['unclosed inline', 'Before $x_1 and after', 0],
+  ['unclosed display', '$$\nx_1\n\nFollowing text', 0],
+  ['empty delimiters', '$$$$', 0],
+  ['invalid TeX', String.raw`$\notARealCommand{x}$`, 1],
+  ['fenced math', '```math\nx^2\n```', 1],
+  ['quoted display math', '> $$\n> x^2\n> $$', 1],
+  ['unclosed fenced math', '```math\nx^2', 0],
+  ['table math', '| Formula |\n| --- |\n| $x^2$ |', 1],
+]) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const instance = dom.window.MDEditor.create(host, source, {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  check(`math edge case: ${label}`, host.querySelectorAll('.katex, .katex-error').length === count
+    && instance.getMarkdown() === source)
+  instance.destroy()
+  host.remove()
+}
+
+const firstMathHost = document.createElement('div')
+document.body.append(firstMathHost)
+window.__mdMathEditLabel = 'Localized math editing instructions'
+const firstMath = window.MDEditor.create(firstMathHost, '$x^2$ after', {})
+await new Promise(resolve => setTimeout(resolve, 10))
+check('math uses the host-provided accessibility label',
+  firstMathHost.querySelector('.math').getAttribute('aria-label') === window.__mdMathEditLabel)
+delete window.__mdMathEditLabel
+firstMathHost.querySelector('.math').dispatchEvent(new dom.window.MouseEvent('mousedown', {
+  bubbles: true, cancelable: true,
+}))
+await new Promise(resolve => setTimeout(resolve, 20))
+check('clicking a formula at document start reveals source safely', !firstMathHost.querySelector('.math')
+  && firstMath.getMarkdown() === '$x^2$ after')
+firstMath.destroy()
+firstMathHost.remove()
+
+for (const [formula, offset] of [
+  ['$x$', 1], ['$$x$$', 2], ['$$ x $$', 2], ['$$\nx\n$$', 3], ['```math\nx\n```', 8],
+]) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const source = 'Before\n\n' + formula + '\n\nAfter'
+  const editor = window.MDEditor.create(host, source, {})
+  host.querySelector('.math').dispatchEvent(new window.MouseEvent('mousedown', {
+    bubbles: true, cancelable: true,
+  }))
+  document.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+  editor.insert('z')
+  const caret = 'Before\n\n'.length + offset
+  check(`clicking math preserves its opening delimiter: ${JSON.stringify(formula)}`,
+    editor.getMarkdown() === source.slice(0, caret) + 'z' + source.slice(caret))
+  editor.destroy()
+  host.remove()
+}
+
+for (const opening of ['> $$\n> x', '- $$\n  x']) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const source = opening + '\n\n# Outside\n\n$$\ny\n$$'
+  const editor = window.MDEditor.create(host, source, {})
+  await new Promise(resolve => setTimeout(resolve, 10))
+  check(`unfinished math stops at its container: ${JSON.stringify(opening)}`,
+    host.querySelectorAll('.katex').length === 1 && !host.querySelector('.katex-error')
+    && host.querySelector('.cm-content').textContent.includes('Outside')
+    && host.querySelector('.cm-content').textContent.includes('x')
+    && editor.getMarkdown() === source)
+  editor.destroy()
+  host.remove()
+}
+
+const typedMathHost = document.createElement('div')
+document.body.append(typedMathHost)
+const typedMath = window.MDEditor.create(typedMathHost, 'Intro\n\n', {})
+const noMathLoads = mathLoads
+check('plain editor does not load KaTeX', !typedMathHost.querySelector('.math') && mathLoads === noMathLoads)
+typedMath.insertTextAt('$$\nx^2\n$$\n\nEnd', 7, 7)
+await new Promise(resolve => setTimeout(resolve, 10))
+check('typing the first formula activates math without reload', typedMathHost.querySelectorAll('.katex').length === 1)
+typedMath.focus()
+await new Promise(resolve => setTimeout(resolve, 550))
+typedMath.insertTextAt('', 14, 16)
+check('deleting closing delimiters restores visible source', !typedMathHost.querySelector('.math')
+  && typedMathHost.textContent.includes('End') && typedMath.getMarkdown().includes('x^2'))
+typedMathHost.querySelector('.cm-content').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+  key: 'z', code: 'KeyZ', ctrlKey: true, bubbles: true, cancelable: true,
+}))
+typedMath.select(typedMath.getMarkdown().length)
+await new Promise(resolve => setTimeout(resolve, 10))
+check('undo restores the formula preview', typedMathHost.querySelectorAll('.katex').length === 1)
+typedMath.destroy()
+typedMathHost.remove()
+
+
+for (const [label, formula, card] of [
+  ['multiline dollars', '$$\n\\frac{1}{x}\n$$', true],
+  ['single-line dollars', '$$ \\frac{1}{x} $$', true],
+  ['quoted dollars', '> $$\n> \\frac{1}{x}\n> $$', true],
+  ['listed dollars', '- $$\n  \\frac{1}{x}\n  $$', true],
+  ['inline math', 'Inline $\\frac{1}{x}$ text.', false],
+  ['display math within prose', 'Before $$ \\frac{1}{x} $$ after.', false],
+]) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const source = formula + '\n\nAfter'
+  const editor = window.MDEditor.create(host, source, {})
+  editor.focus()
+  editor.select(source.indexOf('frac') + 2)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check(`${label}: source uses the expected card`, !!host.querySelector('.cm-md-code-card') === card)
+  check(`${label}: no language picker for dollar math`, !host.querySelector('.cm-md-code-language-input'))
+  if (label === 'inline math') check('active inline math reuses the inline-code content span',
+    host.querySelector('.cm-md-inline-code')?.textContent === '\\frac{1}{x}')
+  if (card) check(`${label}: both delimiters stay visible`,
+    [...host.querySelectorAll('.cm-md-fence-info')].map(node => node.textContent).join('') === '$$$$')
+  check(`${label}: dollar source has no toolbar`, !host.querySelector('.cm-md-code-action'))
+  const closing = source.lastIndexOf('$$')
+  if (card) {
+    editor.insertTextAt('', closing, closing + 2)
+    check(`${label}: deleting the closer leaves editable source`, !host.querySelector('.math')
+      && editor.getMarkdown() === source.slice(0, closing) + source.slice(closing + 2))
+    host.querySelector('.cm-content').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'z', code: 'KeyZ', ctrlKey: true, bubbles: true, cancelable: true,
+    }))
+    check(`${label}: undo restores exact delimiters`, editor.getMarkdown() === source)
+  }
+  editor.select(source.length)
+  await new Promise(resolve => setTimeout(resolve, 10))
+  check(`${label}: leaving source restores only the equation`, !!host.querySelector('.katex')
+    && !host.querySelector('.cm-md-code-card') && editor.getMarkdown() === source)
+  editor.destroy()
+  host.remove()
+}
+
+for (const [label, initial, position, expected] of [
+  ['empty document', '', 0, '$$\n\n$$'],
+  ['after prose', 'Intro\n\n', 7, 'Intro\n\n$$\n\n$$'],
+  ['existing closer', '\nx\n$$', 0, '$$\n\nx\n$$'],
+  ['closing an existing block', '$$\nx\n', 5, '$$\nx\n$$\n'],
+  ['inside code', '```text\n\n```', 8, '```text\n$$\n\n```'],
+  ['inside prose', 'Text ', 5, 'Text $$\n'],
+]) {
+  const host = document.createElement('div')
+  document.body.append(host)
+  const editor = window.MDEditor.create(host, initial, {})
+  editor.select(position)
+  for (const character of '$$') editor.insert(character)
+  check(`typing dollars does not expand: ${label}`, editor.getMarkdown() === initial.slice(0, position) + '$$' + initial.slice(position))
+  host.querySelector('.cm-content').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+    key: 'Enter', code: 'Enter', bubbles: true, cancelable: true,
+  }))
+  check(`dollar completion: ${label}`, editor.getMarkdown() === expected)
+  if (label === 'empty document') {
+    editor.insert('x')
+    check('dollar completion puts typing inside the delimiters', editor.getMarkdown() === '$$\nx\n$$')
+    host.querySelector('.cm-content').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'z', code: 'KeyZ', ctrlKey: true, bubbles: true, cancelable: true,
+    }))
+    check('undoing math input retains the empty paired block', editor.getMarkdown() === '$$\n\n$$')
+    host.querySelector('.cm-content').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      key: 'z', code: 'KeyZ', ctrlKey: true, bubbles: true, cancelable: true,
+    }))
+    check('undoing dollar completion leaves no orphan closer', editor.getMarkdown() === '$$')
+  }
+  editor.destroy()
+  host.remove()
+}
+
+const singleMathHost = document.createElement('div')
+document.body.append(singleMathHost)
+const singleMath = window.MDEditor.create(singleMathHost, '', {})
+for (const character of '$$ equation $$') singleMath.insert(character)
+check('typing a complete single-line formula preserves its layout', singleMath.getMarkdown() === '$$ equation $$')
+singleMath.destroy()
+singleMathHost.remove()
+
+// Exercise the production loader without requiring a network or duplicating it.
+const editorSwift = readFileSync(new URL('../../md-preview/Features/Editor/EditorHTML.swift', import.meta.url), 'utf8')
+const mathLoaderMatch = editorSwift.match(/window\.__mdLoadMath = function \(\) \{[\s\S]*?\n\s*\};/)
+if (!mathLoaderMatch) throw new Error("Could not extract window.__mdLoadMath from EditorHTML.swift")
+const mathLoader = mathLoaderMatch[0]
+dom.window.eval(mathLoader
+  .replace(/css.href = .*?;/, "css.href = 'math-test.css';")
+  .replace(/script.src = .*?;/, "script.src = 'math-test.js';"))
+const failedLoad = window.__mdLoadMath()
+const caughtFailure = failedLoad.catch(error => error)
+const loadError = new dom.window.Event('error')
+document.querySelector('link[href="math-test.css"]').dispatchEvent(loadError)
+check('math loader propagates asset failures', await caughtFailure === loadError)
+check('math loader removes failed asset elements', !document.querySelector('[href="math-test.css"], [src="math-test.js"]'))
+const retryLoad = window.__mdLoadMath()
+check('math loader retries after failure', retryLoad !== failedLoad)
+document.querySelector('link[href="math-test.css"]').dispatchEvent(new dom.window.Event('load'))
+document.querySelector('script[src="math-test.js"]').dispatchEvent(new dom.window.Event('load'))
+await retryLoad
+check('math loader caches successful loads', window.__mdLoadMath() === retryLoad)
+
 process.exit(failures ? 1 : 0)

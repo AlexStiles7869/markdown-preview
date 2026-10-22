@@ -400,8 +400,9 @@ extension ProjectNavigatorView: NSMenuDelegate {
         outlineView.window?.windowController as? DocumentWindowController
     }
 
-    /// Theme accent for the selected file row — the link color, matching
-    /// the TOC outline's treatment. Nil without a link override.
+    /// Theme accent for the selected file row before macOS 27 — the link
+    /// color, matching the TOC outline's treatment. Nil without a link
+    /// override. macOS 27 keeps the plain label color.
     fileprivate var themeAccent: NSColor? {
         let isDark = effectiveAppearance
             .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -414,8 +415,9 @@ extension ProjectNavigatorView: NSMenuDelegate {
         for row in 0..<outlineView.numberOfRows {
             guard let cell = outlineView.view(
                 atColumn: 0, row: row, makeIfNecessary: false
-            ) as? NSTableCellView, let textField = cell.textField else { continue }
-            textField.textColor = row == selected ? accent : .labelColor
+            ) as? SidebarLabelCellView else { continue }
+            cell.label.textColor = SidebarLabelCellView.textColor(
+                selected: row == selected, accent: accent)
         }
     }
 }
@@ -449,19 +451,18 @@ extension ProjectNavigatorView: NSOutlineViewDelegate {
         if let recycled = outlineView.makeView(withIdentifier: identifier, owner: self) as? FileCellView {
             cell = recycled
         } else {
-            cell = FileCellView()
-            cell.identifier = identifier
+            cell = FileCellView(identifier: identifier)
         }
 
         cell.isLoading = isLoading(node)
-        cell.textField?.stringValue = node.displayName
+        cell.label.stringValue = node.displayName
         let icon = NSWorkspace.shared.icon(forFile: node.url.path)
         icon.size = NSSize(width: 16, height: 16)
         cell.imageView?.image = icon
         let row = outlineView.row(forItem: node)
-        cell.textField?.textColor = row >= 0 && row == outlineView.selectedRow
-            ? (themeAccent ?? .controlAccentColor)
-            : .labelColor
+        cell.label.textColor = SidebarLabelCellView.textColor(
+            selected: row >= 0 && row == outlineView.selectedRow,
+            accent: themeAccent ?? .controlAccentColor)
         return cell
     }
 
@@ -496,7 +497,7 @@ extension ProjectNavigatorView: NSOutlineViewDelegate {
 
 /// Icon and name, plus a trailing spinner while the file is loading. The
 /// name gives up the spinner's width only while it's shown.
-private final class FileCellView: NSTableCellView {
+private final class FileCellView: SidebarLabelCellView {
     private let spinner = NSProgressIndicator()
     private var nameTrailingToCell: NSLayoutConstraint!
     private var nameTrailingToSpinner: NSLayoutConstraint!
@@ -514,8 +515,8 @@ private final class FileCellView: NSTableCellView {
         }
     }
 
-    init() {
-        super.init(frame: .zero)
+    override init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(identifier: identifier)
 
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
@@ -523,13 +524,10 @@ private final class FileCellView: NSTableCellView {
         addSubview(imageView)
         self.imageView = imageView
 
-        let textField = NSTextField(labelWithString: "")
-        textField.translatesAutoresizingMaskIntoConstraints = false
+        let textField = label
         textField.lineBreakMode = .byTruncatingTail
         textField.cell?.usesSingleLineMode = true
         textField.maximumNumberOfLines = 1
-        addSubview(textField)
-        self.textField = textField
 
         spinner.translatesAutoresizingMaskIntoConstraints = false
         spinner.style = .spinning

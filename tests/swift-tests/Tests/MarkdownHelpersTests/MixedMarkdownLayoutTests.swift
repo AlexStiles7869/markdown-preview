@@ -48,7 +48,7 @@ extension EditorPreviewLayoutTests {
                            ".markdown-alert": 5, ".footnotes": 1, "details summary": 1, "hr": 2],
            editorSelectors: [".cm-md-table-grid": 2, ".cm-md-mermaid-stage svg": 1, ".cm-md-frontmatter": 6, ".cm-md-table-cell .cm-md-strong": 1,
                              ".cm-md-task-marker input": 2, ".cm-md-task-marker input:checked": 1],
-           editorSourceSnippets: ["$x_1 + x_2$", "[!NOTE]", "[!TIP]",
+           editorSourceSnippets: ["[!NOTE]", "[!TIP]",
                                   "[!IMPORTANT]", "[!WARNING]", "[!CAUTION]", "[reference link][destination]",
                                   "![Reference picture][picture]", "[^first]", "<details>"],
            sourceRepresentationReason: "The comprehensive file includes read-rendered features that intentionally remain source in the editor",
@@ -85,11 +85,11 @@ extension EditorPreviewLayoutTests {
         ], imageCount: 2, editorImageCount: 0,
            readSelectors: [".katex": 3, ".math-error": 0, ".markdown-alert": 5, ".footnotes": 1,
                            "details summary": 1, "p[align=center] img": 1, "table": 2, "input[type=checkbox]": 2],
-           editorSelectors: [".cm-md-frontmatter": 6, ".cm-md-table-grid": 1, ".katex": 0, "details": 0, ".cm-md-table-cell .cm-md-strong": 1,
+           editorSelectors: [".cm-md-frontmatter": 6, ".cm-md-table-grid": 1, ".katex": 3, "details": 0, ".cm-md-table-cell .cm-md-strong": 1,
                              ".cm-md-task-marker input": 2, ".cm-md-task-marker input:checked": 1],
-           editorSourceSnippets: ["$x_1 + x_2$", "[!NOTE]", "[!TIP]", "[!IMPORTANT]", "[!WARNING]", "[!CAUTION]",
+           editorSourceSnippets: ["[!NOTE]", "[!TIP]", "[!IMPORTANT]", "[!WARNING]", "[!CAUTION]",
                                   "[reference link][destination]", "![Reference picture][picture]", "[^first]", "<details>"],
-           sourceRepresentationReason: "Math, footnotes, alerts, reference syntax, and HTML remain editable source; table cells render inline formatting",
+           sourceRepresentationReason: "Footnotes, alerts, reference syntax, and HTML remain editable source; math and inline table formatting render",
            localParityTexts: ["Extended mixed document", "bold introduction", "After equations.", "After alerts.",
                               "After reference image.", "After raw HTML.", "Formatting", "Example", "finalValue",
                               "Final extended paragraph."], height: 14000))
@@ -148,6 +148,33 @@ extension EditorPreviewLayoutTests {
 
             After nested quotes.
             """, texts: ["Before nested quotes.", "Outer quote.", "Second quote paragraph.", "Inner quote.", "After nested quotes."]))
+    }
+
+    /// Block code is smaller than the body, but the container indent around
+    /// it is not: code in a list or quote keeps the reader's text column.
+    /// Only the horizontal column is compared; code in a list item already
+    /// sits about 10px lower in edit mode on main, a separate spacing issue.
+    func testCodeNestedInListsAndQuotesKeepsTheContainerIndent() async throws {
+        try await check(Fixture(name: "code-nested", markdown: """
+            Before nested code.
+
+            - A list item.
+
+              ```
+              listedCodeLine
+              ```
+
+            > A quote.
+            >
+            > ```
+            > quotedCodeLine
+            > ```
+
+            After nested code.
+            """, texts: ["Before nested code.", "A list item.", "listedCodeLine", "A quote.",
+                         "quotedCodeLine", "After nested code."],
+            sourceRepresentationReason: "Code in a list item has a known vertical offset in edit mode",
+            localParityTexts: ["listedCodeLine", "quotedCodeLine"]))
     }
 
     func testFencedUnlabelledAndIndentedCode() async throws {
@@ -212,7 +239,10 @@ extension EditorPreviewLayoutTests {
 
     /// Diagrams in a quote and a list, drawn and empty, keep the preview's
     /// spacing in edit mode: the figure margin above, the quote's closing
-    /// padding below, and the container indent.
+    /// padding below, and the container indent. The empty one sits in the
+    /// list, not the quote: edit mode's placeholder text is longer than the
+    /// reader's and wraps inside a quote at the 500px width, which is a
+    /// deliberate wording difference rather than a spacing one.
     func testNestedMermaidDiagramsMatchTheReader() async throws {
         try await check(Fixture(name: "mermaid-nested", markdown: """
             Before the quote.
@@ -223,11 +253,6 @@ extension EditorPreviewLayoutTests {
             > flowchart LR
             >   Q --> R
             > ```
-            >
-            > And an empty one.
-            >
-            > ```mermaid
-            > ```
 
             - A list item.
 
@@ -235,9 +260,9 @@ extension EditorPreviewLayoutTests {
               ```
 
             After the list.
-            """, texts: ["Before the quote.", "Quoted intro.", "And an empty one.", "A list item.", "After the list."],
-                           readSelectors: [".mermaid svg": 1, ".mermaid-empty": 2],
-                           editorSelectors: [".cm-md-mermaid-stage svg": 1, ".cm-md-mermaid-message": 2],
+            """, texts: ["Before the quote.", "Quoted intro.", "A list item.", "After the list."],
+                           readSelectors: [".mermaid svg": 1, ".mermaid-empty": 1],
+                           editorSelectors: [".cm-md-mermaid-stage svg": 1, ".cm-md-mermaid-message": 1],
                            readBoxes: ["diagram-box": ".mermaid-figure:not(.mermaid-empty)", "diagram-svg": ".mermaid svg"],
                            editorBoxes: ["diagram-box": ".cm-md-mermaid-preview:not(.cm-md-mermaid-message)",
                                          "diagram-svg": ".cm-md-mermaid-stage svg"]))
